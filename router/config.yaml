@@ -1,0 +1,58 @@
+# Cosmo Router 設定（design.md §6.5）
+version: "1"
+
+listen_addr: "0.0.0.0:3002"
+
+execution_config:
+  file:
+    path: /etc/router/router.json
+
+authentication:
+  jwt:
+    jwks:
+      - url: "http://auth:8083/.well-known/jwks.json"
+        refresh_interval: 1m
+        algorithms: ["RS256"]
+        audiences: ["graphql-todo-api"]
+        # ローテーションが定期更新の合間に起きた場合の保険（design.md §6.2）。
+        # 自分で JWKS エンドポイントを DoS しないよう interval / burst で絞る。
+        refresh_unknown_kid:
+          enabled: true
+          max_wait: 2m
+          interval: 30s
+          burst: 2
+    header_name: Authorization
+    header_value_prefix: Bearer
+
+authorization:
+  # 認証を GraphQL グラフの外（auth サービス）に出したことで true にできる。
+  # ADR 0001 の採用によって初めて可能になった設定。
+  # これにより「@authenticated の付け忘れ = 漏洩」が「付け忘れ = 動かない」に変わる。
+  require_authentication: true
+  reject_operation_if_unauthorized: true
+
+headers:
+  all:
+    request:
+      # Router はデフォルトで認証ヘッダをサブグラフへ転送しない。
+      # サブグラフ側の再検証（design.md §6.6）に必要なため明示的に伝播させる。
+      - op: "propagate"
+        named: "Authorization"
+      # 検証済みの sub をヘッダに注入。
+      # ログ・トレース用であって、認可の根拠には使わない（design.md §6.7-5）。
+      - op: "set"
+        name: "X-User-ID"
+        expression: "request.auth.isAuthenticated ? request.auth.claims.sub : ''"
+
+telemetry:
+  # 既定では Cosmo Cloud へトレース／メトリクスを送信する。
+  # 外部依存を持たない構成にするため明示的に止める。
+  tracing:
+    enabled: false
+  metrics:
+    otlp:
+      enabled: false
+    prometheus:
+      enabled: true
+      listen_addr: "0.0.0.0:8088"
+      path: "/metrics"

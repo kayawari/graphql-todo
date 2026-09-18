@@ -1,0 +1,20 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "../../db/auth/migrations"
+    queries: "../../db/auth/queries"
+    gen:
+      go:
+        package: "db"
+        out: "internal/db"
+        sql_package: "pgx/v5"
+        emit_pointers_for_null_types: true
+        overrides:
+          - db_type: "uuid"
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+          # CITEXT は拡張型。素の string として扱い、
+          # 大文字小文字の同一視は DB 側（UNIQUE 制約）に任せる。
+          - db_type: "citext"
+            go_type: "string"

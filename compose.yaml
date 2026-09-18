@@ -1,0 +1,176 @@
+# 開発環境一式（design.md §8）
+#
+# 起動順序:
+#   postgres → migrate-* → auth / サブグラフ → router-compose → router → (envoy)
+#
+# 通常:      docker compose up -d          クライアントは :8083 と :3002
+# Envoy 込み: docker compose --profile proxy up -d   クライアントは :8080 のみ
+
+name: graphql-todo
+
+x-postgres-env: &postgres-host
+  PGHOST: postgres
+  PGPORT: "5432"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # ---- マイグレーション（one-shot）----
+  migrate-auth:
+    image: migrate/migrate:v4.17.1
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - ./db/auth/migrations:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://auth_svc:${AUTH_DB_PASSWORD:-auth_pass}@postgres:5432/auth_db?sslmode=disable"
+      - "up"
+
+  migrate-user:
+    image: migrate/migrate:v4.17.1
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - ./db/user/migrations:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://user_svc:${USER_DB_PASSWORD:-user_pass}@postgres:5432/user_db?sslmode=disable"
+      - "up"
+
+  migrate-todo:
+    image: migrate/migrate:v4.17.1
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - ./db/todo/migrations:/migrations:ro
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://todo_svc:${TODO_DB_PASSWORD:-todo_pass}@postgres:5432/todo_db?sslmode=disable"
+      - "up"
+
+  # ---- auth: GraphQL グラフに参加しない REST サービス（ADR 0001）----
+  auth:
+    build: ./services/auth
+    depends_on:
+      migrate-auth: { condition: service_completed_successfully }
+    environment:
+      LISTEN_ADDR: ":8083"
+      DATABASE_URL: "postgres://auth_svc:${AUTH_DB_PASSWORD:-auth_pass}@postgres:5432/auth_db?sslmode=disable"
+      JWT_ISSUER: ${JWT_ISSUER:-http://auth:8083}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-graphql-todo-api}
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
+      JWT_PRIVATE_KEY_PATH: /run/secrets/jwt_private.pem
+    volumes:
+      # make gen-keys で生成した開発用の秘密鍵。auth だけがこれを持つ。
+      - ./secrets/dev/jwt_private.pem:/run/secrets/jwt_private.pem:ro
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8083/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # ---- サブグラフ ----
+  user-subgraph:
+    build: ./services/user
+    depends_on:
+      migrate-user: { condition: service_completed_successfully }
+    environment:
+      LISTEN_ADDR: ":8081"
+      DATABASE_URL: "postgres://user_svc:${USER_DB_PASSWORD:-user_pass}@postgres:5432/user_db?sslmode=disable"
+      JWKS_URL: ${JWKS_URL:-http://auth:8083/.well-known/jwks.json}
+      JWT_ISSUER: ${JWT_ISSUER:-http://auth:8083}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-graphql-todo-api}
+    ports:
+      # todo.md #1（サブグラフ直叩きの検証）のために host へ公開している。
+      # 検証が済んだら expose のみに切り替えるか判断する。
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  todo-subgraph:
+    build: ./services/todo
+    depends_on:
+      migrate-todo: { condition: service_completed_successfully }
+    environment:
+      LISTEN_ADDR: ":8082"
+      DATABASE_URL: "postgres://todo_svc:${TODO_DB_PASSWORD:-todo_pass}@postgres:5432/todo_db?sslmode=disable"
+      JWKS_URL: ${JWKS_URL:-http://auth:8083/.well-known/jwks.json}
+      JWT_ISSUER: ${JWT_ISSUER:-http://auth:8083}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-graphql-todo-api}
+    ports:
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8082/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # ---- スキーマ合成（one-shot / control plane 不要）----
+  router-compose:
+    image: node:22-alpine
+    working_dir: /work
+    depends_on:
+      user-subgraph: { condition: service_healthy }
+      todo-subgraph: { condition: service_healthy }
+    volumes:
+      - ./router:/work
+    command: >
+      npx -y wgc@latest router compose -i /work/graph.yaml -o /work/router.json
+
+  router:
+    image: ghcr.io/wundergraph/cosmo/router:latest
+    depends_on:
+      router-compose: { condition: service_completed_successfully }
+      # 起動直後の JWKS 取得失敗を避ける（design.md §8.2）
+      auth: { condition: service_healthy }
+    environment:
+      CONFIG_PATH: /etc/router/config.yaml
+      EXECUTION_CONFIG_FILE_PATH: /etc/router/router.json
+      # ローカル合成のため control plane には接続しない。
+      # GRAPH_API_TOKEN は設定しない（設定すると JWT として解釈され起動に失敗する）。
+      DEV_MODE: "true"
+    volumes:
+      # router.json は router-compose が生成するため、起動時点では
+      # 存在しないことがある。ファイル単位でマウントすると Docker が
+      # ディレクトリを作ってしまうので、ディレクトリごとマウントする。
+      - ./router:/etc/router:ro
+    ports:
+      - "3002:3002"
+      - "8088:8088"
+
+  # ---- エッジ（オプトイン）----
+  envoy:
+    image: envoyproxy/envoy:v1.31-latest
+    profiles: ["proxy"]
+    depends_on:
+      - router
+      - auth
+    volumes:
+      - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "8080:8080"
+      - "9901:9901"
+
+volumes:
+  pgdata:

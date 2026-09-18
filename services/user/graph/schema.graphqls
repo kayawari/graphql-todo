@@ -1,0 +1,29 @@
+extend schema
+  @link(
+    url: "https://specs.apollo.dev/federation/v2.5"
+    import: ["@key", "@authenticated"]
+  )
+
+scalar Time
+
+type User @key(fields: "id") @authenticated {
+  id: ID!
+  """
+  user_db には保存せず、リクエストの JWT claims から解決する。
+  他人の User エンティティを解決しても、手元にあるのは自分のトークンだけなので
+  構造的に null にしかならない（design.md §4.2）。
+  """
+  email: String
+  displayName: String!
+  createdAt: Time!
+}
+
+type Query {
+  """認証済みユーザー自身。初回アクセス時に JIT provisioning が走る。"""
+  me: User! @authenticated
+}
+
+type Mutation {
+  """displayName の真実源は user_db 側。JWT の claim は初期値としてのみ使う。"""
+  updateProfile(displayName: String!): User! @authenticated
+}

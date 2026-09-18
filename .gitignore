@@ -1,0 +1,11 @@
+# 開発用の署名鍵（design.md §6.2）
+secrets/
+
+# wgc router compose の生成物（design.md §8.3）
+router/router.json
+
+# 環境変数
+.env
+
+# ビルド成果物
+bin/

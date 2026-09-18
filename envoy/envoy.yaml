@@ -1,0 +1,118 @@
+# Envoy 設定（design.md §8.5）
+# compose profile "proxy" を有効にしたときだけ起動する。
+#
+# 役割:
+#   1. パスルーティング（/auth/* → auth、/graphql → router）
+#   2. ログインの IP 単位レート制限（ブルートフォース対策）
+#   3. 401 レスポンスボディの正規化（失敗理由を区別させない / design.md §6.8-#9）
+
+admin:
+  address:
+    socket_address: { address: 0.0.0.0, port_value: 9901 }
+
+static_resources:
+  listeners:
+    - name: edge
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 8080 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: edge
+                access_log:
+                  - name: envoy.access_loggers.stdout
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+
+                # 認証失敗の理由をクライアントに区別させない（design.md §6.8-#9）。
+                # Router や auth のエラー文言に依存せず、エッジで一律に潰す。
+                local_reply_config:
+                  mappers:
+                    - filter:
+                        status_code_filter:
+                          comparison:
+                            op: EQ
+                            value: { default_value: 401, runtime_key: unused }
+                      body:
+                        inline_string: '{"error":"unauthenticated"}'
+                      headers_to_add:
+                        - header: { key: "content-type", value: "application/json" }
+                          append_action: OVERWRITE_IF_EXISTS_OR_ADD
+
+                route_config:
+                  name: edge_routes
+                  virtual_hosts:
+                    - name: all
+                      domains: ["*"]
+                      routes:
+                        # ログイン / サインアップ: レート制限あり
+                        - match: { path: "/auth/login" }
+                          route: { cluster: auth }
+                          typed_per_filter_config:
+                            envoy.filters.http.local_ratelimit:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+                              stat_prefix: auth_login
+                              token_bucket:
+                                max_tokens: 5
+                                tokens_per_fill: 5
+                                fill_interval: 60s
+                              filter_enabled:
+                                default_value: { numerator: 100, denominator: HUNDRED }
+                              filter_enforced:
+                                default_value: { numerator: 100, denominator: HUNDRED }
+                        - match: { path: "/auth/signup" }
+                          route: { cluster: auth }
+                          typed_per_filter_config:
+                            envoy.filters.http.local_ratelimit:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+                              stat_prefix: auth_signup
+                              token_bucket:
+                                max_tokens: 5
+                                tokens_per_fill: 5
+                                fill_interval: 60s
+                              filter_enabled:
+                                default_value: { numerator: 100, denominator: HUNDRED }
+                              filter_enforced:
+                                default_value: { numerator: 100, denominator: HUNDRED }
+
+                        # JWKS: 公開鍵の配信。レート制限なし
+                        - match: { prefix: "/.well-known/" }
+                          route: { cluster: auth }
+
+                        # GraphQL
+                        - match: { prefix: "/graphql" }
+                          route: { cluster: router }
+
+                http_filters:
+                  - name: envoy.filters.http.local_ratelimit
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
+                      stat_prefix: edge_ratelimit
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: auth
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: auth
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: auth, port_value: 8083 }
+
+    - name: router
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: router
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: router, port_value: 3002 }

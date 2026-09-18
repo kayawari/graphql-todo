@@ -1,0 +1,40 @@
+schema:
+  - graph/*.graphqls
+
+exec:
+  filename: graph/generated/generated.go
+  package: generated
+
+model:
+  filename: graph/model/models_gen.go
+  package: model
+
+resolver:
+  layout: follow-schema
+  dir: graph
+  package: graph
+  filename_template: "{name}.resolvers.go"
+
+federation:
+  # gqlgen は federation と exec が同じパッケージであることを要求する。
+  filename: graph/generated/federation.go
+  package: generated
+  version: 2
+
+directives:
+  # @authenticated は Router が解釈するスキーマレベルのディレクティブ。
+  # サブグラフ側に実行時の実装は不要なので skip_runtime にする。
+  authenticated:
+    skip_runtime: true
+
+models:
+  Time:
+    model:
+      - github.com/99designs/gqlgen/graphql.Time
+  User:
+    fields:
+      todos:
+        # 引数（status）を取り、DB へ問い合わせる必要があるためリゾルバを強制する。
+        # これを指定しないと gqlgen はモデルの Todos フィールドに直接束縛し、
+        # 引数も認可チェックも効かないまま常に空配列を返す。
+        resolver: true

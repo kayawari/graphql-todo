@@ -1,0 +1,14 @@
+# wgc router compose の入力（design.md §8.3）。
+# docker compose の compose.yaml と紛らわしいので別名にしている。
+#
+# auth はここに現れない。GraphQL グラフに参加しないサービスなので合成対象外。
+version: 1
+subgraphs:
+  - name: user
+    routing_url: http://user-subgraph:8081/graphql
+    introspection:
+      url: http://user-subgraph:8081/graphql
+  - name: todo
+    routing_url: http://todo-subgraph:8082/graphql
+    introspection:
+      url: http://todo-subgraph:8082/graphql

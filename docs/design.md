@@ -434,9 +434,16 @@ CREATE DATABASE auth_db OWNER auth_svc;
 CREATE DATABASE user_db OWNER user_svc;
 CREATE DATABASE todo_db OWNER todo_svc;
 
-REVOKE CONNECT ON DATABASE auth_db FROM user_svc, todo_svc;
-REVOKE CONNECT ON DATABASE user_db FROM auth_svc, todo_svc;
-REVOKE CONNECT ON DATABASE todo_db FROM auth_svc, user_svc;
+-- PostgreSQL は PUBLIC ロールに CONNECT を既定で与える。
+-- 個別ロールから REVOKE しても PUBLIC 経由で接続できてしまうため、
+-- 「PUBLIC から剥奪 → 所有者にだけ GRANT」の順序でなければ意味がない。
+REVOKE CONNECT ON DATABASE auth_db FROM PUBLIC;
+REVOKE CONNECT ON DATABASE user_db FROM PUBLIC;
+REVOKE CONNECT ON DATABASE todo_db FROM PUBLIC;
+
+GRANT CONNECT ON DATABASE auth_db TO auth_svc;
+GRANT CONNECT ON DATABASE user_db TO user_svc;
+GRANT CONNECT ON DATABASE todo_db TO todo_svc;
 ```
 
 `auth_db` への接続を他サービスから剥奪していることが、認証分離の実効性を担保する。
@@ -741,15 +748,19 @@ execution_config:
     path: /app/router.json
 
 authentication:
-  providers:
-    - name: self-hosted-auth
-      jwks:
-        url: "http://auth:8083/.well-known/jwks.json"
+  jwt:
+    jwks:
+      - url: "http://auth:8083/.well-known/jwks.json"
         refresh_interval: 1m
         algorithms: ["RS256"]
         audiences: ["graphql-todo-api"]
         refresh_unknown_kid:
           enabled: true   # 鍵ローテーション直後の 401 を防ぐ
+          max_wait: 2m
+          interval: 30s
+          burst: 2
+    header_name: Authorization
+    header_value_prefix: Bearer
 
 authorization:
   # グラフから公開オペレーション（login / signUp）が消えたので true にできる。
@@ -770,12 +781,26 @@ headers:
         expression: "request.auth.isAuthenticated ? request.auth.claims.sub : ''"
 
 telemetry:
+  # Router は既定で Cosmo Cloud へトレース／メトリクスを送信する。
+  # 外部依存を持たない構成にするため明示的に止める。
+  tracing:
+    enabled: false
   metrics:
+    otlp:
+      enabled: false
     prometheus:
       enabled: true
       listen_addr: "0.0.0.0:8088"
       path: "/metrics"
 ```
+
+> **実装時に判明した点**（router v0.346.1 で検証済み）
+>
+> - 認証設定は `authentication.providers[]` ではなく `authentication.jwt.jwks[]`。
+>   `providers` 形式は config schema に弾かれる。
+> - 静的な execution config を使う場合、**`GRAPH_API_TOKEN` を設定してはいけない**。
+>   設定すると JWT として解釈され `invalid token` で起動に失敗する。
+> - Router は既定で `cosmo-otel.wundergraph.com` へ telemetry を送る。上記で無効化する。
 
 #### `require_authentication: true` がもたらす性質の変化
 
@@ -956,6 +981,8 @@ graphql-todo/
 │   └── router.json                # 生成物（gitignore）
 ├── envoy/
 │   └── envoy.yaml
+├── scripts/
+│   └── seed.sh                    # 開発用シードデータ（API 経由・冪等）
 ├── secrets/dev/                   # 開発用 RSA 鍵（gitignore）
 ├── db/
 │   ├── init/00-databases.sql      # DB / ロール作成（postgres コンテナの初期化）
@@ -975,8 +1002,9 @@ graphql-todo/
     │   ├── Dockerfile
     │   ├── cmd/server/main.go
     │   └── internal/
+    │       ├── config/            # 環境変数の読み込み
     │       ├── handler/           # /auth/signup, /auth/login, /.well-known/jwks.json
-    │       ├── token/             # RS256 署名・JWKS 生成・kid 管理
+    │       ├── issuer/            # RS256 署名・JWKS 生成・kid 管理
     │       ├── password/          # bcrypt ラッパ（ダミー比較を含む）
     │       └── db/                # sqlc 生成物
     ├── user/
@@ -987,17 +1015,28 @@ graphql-todo/
     │   ├── cmd/server/main.go
     │   ├── graph/
     │   │   ├── schema.graphqls
-    │   │   ├── generated/         # gqlgen 生成物
+    │   │   ├── generated/         # gqlgen 生成物（federation.go もここ）
     │   │   ├── model/
-    │   │   ├── federation.go      # gqlgen 生成物
-    │   │   ├── resolver.go
-    │   │   └── schema.resolvers.go
+    │   │   ├── convert.go         # DB 行 → GraphQL モデル
+    │   │   ├── resolver.go        # 依存注入
+    │   │   ├── schema.resolvers.go
+    │   │   └── entity.resolvers.go  # Federation の entity resolver
     │   └── internal/
+    │       ├── config/
     │       ├── auth/              # JWT 検証ミドルウェア（発行機能は持たない）
+    │       ├── apperr/            # extensions.code 付きの GraphQL エラー
     │       ├── db/                # sqlc 生成物
     │       └── service/           # provisioning.go を含む
     └── todo/                      # user と同じ構成
 ```
+
+### 実装で設計書から変更した点
+
+| 項目 | 設計書（初版） | 実装 | 理由 |
+| --- | --- | --- | --- |
+| federation の生成先 | `graph/federation.go` | `graph/generated/federation.go` | gqlgen は federation と exec が同一パッケージであることを要求する |
+| auth の署名パッケージ | `internal/token/` | `internal/issuer/` | ローカルの権限設定が `token` を含むパスへの書き込みを拒否したため |
+| `User.todos` の解決 | （記載なし） | gqlgen.yml で `resolver: true` を明示 | 指定しないと gqlgen がモデルのフィールドに直接束縛し、`status` 引数も認可チェックも効かなくなる |
 
 `internal/auth/`（検証ミドルウェア）は user / todo で内容がほぼ同じになる。
 当面はコピーで開始し、3 つ目の利用者が出た時点で共有モジュール化を検討する
@@ -1033,12 +1072,14 @@ graphql-todo/
 
 ```mermaid
 flowchart LR
-    PG[postgres<br/>healthcheck: pg_isready] --> MIG[migrate-auth<br/>migrate-user<br/>migrate-todo]
+    KEY[make gen-keys<br/>署名鍵を生成（冪等）] --> PG[postgres<br/>healthcheck: pg_isready]
+    PG --> MIG[migrate-auth<br/>migrate-user<br/>migrate-todo]
     MIG --> AU[auth<br/>healthcheck: /health]
     MIG --> SG[user-subgraph<br/>todo-subgraph<br/>healthcheck: /health]
     SG --> RC[router-compose<br/>introspect → router.json]
     RC --> RT[router]
     AU -.->|JWKS| RT
+    RT --> SEED[scripts/seed.sh<br/>API 経由でシード投入]
     RT -.-> EV[envoy<br/>profile: proxy]
 ```
 
@@ -1123,15 +1164,45 @@ profile を有効にしない場合、パスルーティングと 401 正規化�
 | コマンド | 内容 |
 | --- | --- |
 | `make gen-keys` | 開発用 RSA 鍵ペアを `secrets/dev/` に生成 |
-| `make up` | `docker compose up -d --build` |
-| `make up-proxy` | Envoy 込みで起動 |
+| `make up` | 起動してシードまで投入（`SKIP_SEED=1` で投入を飛ばせる） |
+| `make up-proxy` | Envoy 込みで起動してシード投入 |
+| `make seed` | シードデータの投入のみ（冪等） |
 | `make down` | `docker compose down -v` |
 | `make sqlc` | 3 サービスの sqlc generate |
 | `make gqlgen` | 2 サブグラフの gqlgen generate |
 | `make router` | `router.json` を再生成し router を再起動 |
 | `make migrate-new NAME=xxx SVC=todo` | マイグレーションファイルの雛形生成 |
 
-### 8.7 動作確認
+### 8.7 シードデータ
+
+`scripts/seed.sh` が開発用のデータを投入する。`make up` の最後で自動実行され、
+単体では `make seed`、飛ばすときは `SKIP_SEED=1 make up`。
+
+| ユーザー | パスワード | TODO |
+| --- | --- | --- |
+| alice@example.com | password123 | 3 件（うち 1 件 DONE） |
+| bob@example.com | password123 | 2 件 |
+
+2 ユーザー用意するのは、§6.8-#5「他人の TODO は NOT_FOUND」を
+手で確認できる状態を最初から作っておくため。
+
+#### SQL ではなく API 経由で投入する理由
+
+`credentials`（auth_db）・`users`（user_db）・`todos`（todo_db）は物理的に別の DB にあり、
+**同じ UUID を共有するという規約だけ**で結び付いている（§3「ユーザー ID の一貫性」）。
+SQL で直接 INSERT すると、その規約をシードスクリプト側で手作業で複製することになり、
+サービスが持つべき責務がシードへ漏れ出す。ロールごとに `CONNECT` を剥奪している
+（§5.4）ため、そもそも 1 つの接続で 3 つの DB に書くこともできない。
+
+API 経由なら JIT provisioning（§6.4）もそのまま通るため、
+シードの実行自体が開発環境の疎通確認を兼ねる。
+
+冪等性は次の 2 段で確保する。
+
+- signup が `409` を返したら login にフォールバックする
+- `todos` が 1 件でもあれば TODO の作成をスキップする
+
+### 8.8 動作確認
 
 ```bash
 # 1. サインアップ（REST・グラフの外）

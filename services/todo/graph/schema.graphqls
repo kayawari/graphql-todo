@@ -1,0 +1,59 @@
+extend schema
+  @link(
+    url: "https://specs.apollo.dev/federation/v2.5"
+    import: ["@key", "@authenticated"]
+  )
+
+scalar Time
+
+enum TodoStatus {
+  TODO
+  DONE
+}
+
+type Todo @key(fields: "id") @authenticated {
+  id: ID!
+  title: String!
+  description: String
+  status: TodoStatus!
+  dueDate: Time
+  createdAt: Time!
+  updatedAt: Time!
+  """所有者。user サブグラフが残りのフィールドを解決する。"""
+  user: User!
+}
+
+"""user サブグラフが所有する型を、todo サブグラフが拡張する"""
+type User @key(fields: "id") {
+  id: ID!
+  todos(status: TodoStatus): [Todo!]! @authenticated
+}
+
+input TodoFilter {
+  status: TodoStatus
+  dueBefore: Time
+}
+
+input CreateTodoInput {
+  title: String!
+  description: String
+  dueDate: Time
+}
+
+input UpdateTodoInput {
+  title: String
+  description: String
+  status: TodoStatus
+  dueDate: Time
+}
+
+type Query {
+  todo(id: ID!): Todo @authenticated
+  todos(filter: TodoFilter): [Todo!]! @authenticated
+}
+
+type Mutation {
+  createTodo(input: CreateTodoInput!): Todo! @authenticated
+  updateTodo(id: ID!, input: UpdateTodoInput!): Todo! @authenticated
+  deleteTodo(id: ID!): Boolean! @authenticated
+}
