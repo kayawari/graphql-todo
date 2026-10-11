@@ -1,0 +1,13 @@
+{{define "content"}}
+<form method="post" action="/todos">
+  <p><input type="text" name="title" maxlength="200" placeholder="やること" required>
+     <input type="date" name="dueDate">
+     <button>追加</button></p>
+  <p><input type="text" name="description" placeholder="メモ（任意）" size="40"></p>
+</form>
+<ul class="todos" id="todos">
+{{template "items" .}}
+</ul>
+{{if not .Items}}<p class="sub">未完了の TODO はありません。</p>{{end}}
+<script src="/static/scroll.js" defer></script>
+{{end}}

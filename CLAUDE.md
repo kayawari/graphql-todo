@@ -14,14 +14,14 @@ make up-proxy    # Envoy 込みで :8080 に入口を一本化
 make down        # 停止 + ボリューム削除（次回はまっさらから）
 make generate    # sqlc + gqlgen を 3 サービス分再生成（go tool 経由。別途インストール不要）
 make router      # router.json を再合成して Router を再起動
-make build / make test / make tidy   # 3 サービスに対して go build / go test / go mod tidy
+make build / make test / make tidy   # 全サービス（auth / user / todo / web）に対して go build / go test / go mod tidy
 make migrate-new SVC=todo NAME=add_priority
 ```
 
 - 各サービス（`services/{auth,user,todo}`）は**独立した Go モジュール**（go.work なし）。Go コマンドはサービスのディレクトリ内で実行する。
   単一テスト: `cd services/todo && go test ./internal/service -run TestName`
-- 自動テストはまだ無い（テスト方針は design.md §10）。
-- GraphQL スキーマ（`services/{user,todo}/graph/schema.graphqls`）を変えたら `make generate && make router`。再合成しないと Router は古いスーパーグラフのまま動く。
+- テストは web のハンドラ（`httptest` + 偽の Router）と todo のカーソルだけ。テスト方針は design.md §10。
+- GraphQL スキーマ（`services/{user,todo}/graph/schema.graphqls`）を変えたら `make generate && make router`。再合成しないと Router は古いスーパーグラフのまま動く（`make up` だけでは、起動中の Router は新しい `router.json` を読み直さない）。
 - SQL（`db/<svc>/queries/*.sql` やマイグレーション）を変えたら `make sqlc`。sqlc はマイグレーションディレクトリをスキーマとして読む。マイグレーション適用は `make down && make up` が最速。
 - `make gen-keys` は意図的に冪等。`secrets/dev/jwt_private.pem` を消して再生成すると `kid` が変わり発行済みトークンが全滅する。
 
@@ -29,8 +29,9 @@ make migrate-new SVC=todo NAME=add_priority
 
 ```
 Client ─(Envoy :8080, 任意)─┬─ /auth/*  → auth :8083（REST・グラフ外。署名と JWKS 配信）
-                            └─ /graphql → Cosmo Router :3002 ─┬─ user サブグラフ :8081（User 所有）
-                                                               └─ todo サブグラフ :8082（Todo 所有、User.todos を拡張）
+                            ├─ /graphql → Cosmo Router :3002 ─┬─ user サブグラフ :8081（User 所有）
+                            │                                  └─ todo サブグラフ :8082（Todo 所有、User.todos を拡張）
+                            └─ /（他）  → web :8084（html/template の BFF・グラフ外。auth と Router をサーバー側から呼ぶ）
 PostgreSQL: auth_db / user_db / todo_db（ロールごとに分離、相互 CONNECT 剥奪）
 ```
 
@@ -48,6 +49,13 @@ PostgreSQL: auth_db / user_db / todo_db（ロールごとに分離、相互 CONN
 - `internal/auth` と `internal/apperr` は user / todo でコピーしている（意図的な重複。3 つ目の利用者が出たら共有化を検討）。片方を直したらもう片方も揃える。
 - サブグラフの JWKS は起動時ではなく初回検証時に遅延取得する（auth の起動を待たないため）。
 - エラーは `internal/apperr` で `extensions.code` 付きの gqlerror にする。内部エラーの詳細はログにだけ残す。
+
+### web（services/web、design.md §4.7）
+
+- 標準ライブラリのみ。テンプレートと JS は `web/` に置き、`embed` でバイナリに入れる。画面ごとに `layout.html` と各ページのテンプレートを組で読み込む（`content` をページごとに定義し直すため）。
+- アクセストークンは `HttpOnly` + `SameSite=Strict` の Cookie に入れ、サーバー側で Router へ `Authorization` として転送する。web 自身はトークンを検証せず、ユーザー ID も扱わない。Router の 401 は Cookie 削除 + `/login`、`NOT_FOUND` は 404 画面にする。
+- 認証が要るルートは `requireSession` で包む（`Cache-Control: no-store` も付く）。POST はすべて `sameOrigin` で Origin / Referer を確かめる。
+- 一覧は `todoConnection(filter: {status: TODO})`。DONE は表示しない。CSS は黒〜グレーの濃淡のみ。
 
 ### 認可ルール（破ると即情報漏洩。design.md §6.7）
 

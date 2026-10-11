@@ -1,5 +1,8 @@
 SHELL := /bin/bash
-SERVICES := auth user todo
+# Go モジュール全体（build / test / tidy の対象）と、sqlc を使うものを分ける。
+# web は DB を持たないので sqlc の対象外。
+GO_SERVICES := auth user todo web
+SQLC_SERVICES := auth user todo
 SUBGRAPHS := user todo
 KEY_DIR := secrets/dev
 KEY := $(KEY_DIR)/jwt_private.pem
@@ -26,8 +29,8 @@ $(KEY):
 generate: sqlc gqlgen ## sqlc と gqlgen の生成物をまとめて作り直す
 
 .PHONY: sqlc
-sqlc: ## sqlc generate（3 サービス）
-	@for s in $(SERVICES); do \
+sqlc: ## sqlc generate（auth / user / todo）
+	@for s in $(SQLC_SERVICES); do \
 		echo "==> sqlc: $$s"; \
 		(cd services/$$s && go tool sqlc generate) || exit 1; \
 	done
@@ -40,23 +43,23 @@ gqlgen: ## gqlgen generate（2 サブグラフ）
 	done
 
 .PHONY: tidy
-tidy: ## go mod tidy（3 サービス）
-	@for s in $(SERVICES); do (cd services/$$s && go mod tidy) || exit 1; done
+tidy: ## go mod tidy（全サービス）
+	@for s in $(GO_SERVICES); do (cd services/$$s && go mod tidy) || exit 1; done
 
 .PHONY: build
-build: ## go build（3 サービス）
-	@for s in $(SERVICES); do (cd services/$$s && go build ./...) || exit 1; done
+build: ## go build（全サービス）
+	@for s in $(GO_SERVICES); do (cd services/$$s && go build ./...) || exit 1; done
 
 .PHONY: test
-test: ## go test（3 サービス）
-	@for s in $(SERVICES); do (cd services/$$s && go test ./...) || exit 1; done
+test: ## go test（全サービス）
+	@for s in $(GO_SERVICES); do (cd services/$$s && go test ./...) || exit 1; done
 
 # ---- 起動 ----
 # SKIP_SEED=1 make up でシード投入を飛ばせる
 SKIP_SEED ?=
 
 .PHONY: up
-up: gen-keys ## 開発環境を起動してシードを投入（Envoy なし。:8083 と :3002）
+up: gen-keys ## 開発環境を起動してシードを投入（Envoy なし。web :8084 / auth :8083 / router :3002）
 	docker compose up -d --build
 	@if [ -z "$(SKIP_SEED)" ]; then $(MAKE) seed; else echo "SKIP_SEED=1 のためシードを飛ばしました"; fi
 

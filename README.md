@@ -10,13 +10,15 @@ GraphQL Federation（WunderGraph Cosmo）による TODO アプリケーション
 
 ```
 Client ─┬─ (profile: proxy) ─ Envoy :8080 ─┬─ /auth/*  ─→ auth      :8083  REST・グラフ外
-        │                                  └─ /graphql ─→ Router    :3002
+        │                                  ├─ /graphql ─→ Router    :3002
+        │                                  └─ /（他）  ─→ web       :8084  BFF・グラフ外
+        ├─ web    :8084 ─→ auth / Router（サーバー側から呼ぶ）
         ├─ auth   :8083                                    ├─→ user サブグラフ :8081
         └─ Router :3002                                    └─→ todo サブグラフ :8082
                                        PostgreSQL :5432  auth_db / user_db / todo_db
 ```
 
-`auth` は GraphQL グラフに参加しない。これにより Router を
+`auth` と `web` は GraphQL グラフに参加しない。これにより Router を
 `require_authentication: true` で閉じられる（[ADR 0001](docs/adr/0001-authentication-service-separation.md)）。
 
 ---
@@ -50,12 +52,14 @@ make up
 | 4 | **サービス起動** | auth / user サブグラフ / todo サブグラフ。各 `/health` が healthy になるまで待つ |
 | 5 | **スキーマ合成** | `wgc router compose` が 2 つのサブグラフを introspect し `router/router.json` を生成（control plane 不要） |
 | 6 | **Router 起動** | 生成された `router.json` を読んで :3002 で待ち受ける |
+| 6' | **web 起動** | auth が healthy・Router が起動した後に :8084 で待ち受ける |
 | 7 | **シード投入** | `scripts/seed.sh` がユーザー 2 名と TODO 5 件を API 経由で投入 |
 
 完了すると次が使える状態になる。
 
 | | URL |
 | --- | --- |
+| **Web フロントエンド** | http://localhost:8084/ |
 | ログイン / サインアップ | http://localhost:8083/auth/login, `/auth/signup` |
 | GraphQL | http://localhost:3002/graphql |
 | GraphQL Playground | http://localhost:3002/ |
@@ -150,6 +154,7 @@ make down && make up   # 適用（開発中はこれが一番早い）
 | `services/auth/` | 認証サービス（REST、グラフ外） |
 | `services/user/` | user サブグラフ（User エンティティ所有） |
 | `services/todo/` | todo サブグラフ（Todo 所有、User.todos を拡張） |
+| `services/web/` | Web フロントエンド（html/template の BFF、グラフ外） |
 
 ## 実装状況
 
@@ -163,5 +168,7 @@ make down && make up   # 適用（開発中はこれが一番早い）
 | `User.todos`（Federation の entity 解決） | 実装済み・動作確認済み |
 | 他人のリソースが `NOT_FOUND` になること | 動作確認済み |
 | シードデータ | 実装済み・冪等性確認済み |
-| 自動テスト | **未着手**（design.md §10） |
-| リフレッシュトークン | **未着手**（design.md §12-1。FE 着手前に必要） |
+| ページネーション（`todoConnection`） | 実装済み・動作確認済み |
+| Web フロントエンド（ログイン / サインアップ / 一覧 / 追加・編集・完了・削除 / Infinite スクロール） | 実装済み・動作確認済み |
+| 自動テスト | 一部のみ（web のハンドラ、カーソル。design.md §10） |
+| リフレッシュトークン | **未着手**（design.md §12-1。web は 15 分で再ログインになる。todo.md #9） |

@@ -1,0 +1,29 @@
+{{define "layout"}}<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} - TODO</title>
+<style>
+  /* 装飾は最小限。色相は使わず濃淡だけで表現する。 */
+  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; color: #111; }
+  a { color: #111; }
+  a:visited { color: #555; }
+  header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; margin-bottom: 1rem; }
+  ul.todos { list-style: none; padding: 0; }
+  ul.todos > li { border-bottom: 1px solid #ddd; padding: .5rem 0; }
+  .sub { color: #555; font-size: .9em; }
+  .error { background: #eee; border-left: 3px solid #111; padding: .5rem; }
+  form.inline { display: inline; }
+</style>
+</head>
+<body>
+<header>
+  <h1>TODO</h1>
+  {{if .User}}<div><span class="sub">{{.User}}</span>
+    <form class="inline" method="post" action="/logout"><button>ログアウト</button></form></div>{{end}}
+</header>
+{{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+{{template "content" .}}
+</body>
+</html>{{end}}

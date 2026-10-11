@@ -1,7 +1,7 @@
 # GraphQL TODO アプリケーション 設計書
 
 - ステータス: Draft（レビュー待ち）
-- 最終更新: 2026-09-13
+- 最終更新: 2026-10-12
 - スコープ: 開発環境で動く TODO の CRUD。本番構成は「候補の比較」までに留める。
 - 決定記録: [ADR 0001 — 認証を user サブグラフから分離するか](adr/0001-authentication-service-separation.md)（Accepted）
 - 検証待ち: [todo.md](../todo.md)
@@ -19,15 +19,16 @@
 - ユーザー登録 / ログイン（JWT 発行）
 - 自分が作成した TODO 以外は一切見えない認可
 - docker compose 一発で立ち上がる開発環境
+- `html/template` でサーバー描画する最小限の Web フロントエンド（§4.7）
 
 ### やらないこと（今回のスコープ外）
 
 - キャッシュサーバー（Redis 等）
 - 本番環境の IaC・CI/CD・監視の実装（構成候補の比較まで）
-- フロントエンドクライアント
 - GraphQL Subscription（リアルタイム更新）
 - パスワードリセット / メール確認
-- リフレッシュトークン（**ただし FE クライアントに着手する前に必ず実装する**。§6.1, §12-1）
+- リフレッシュトークン（§6.1, §12-1）。当初は「FE 着手前に必ず実装する」としていたが、
+  Web フロントエンド（§4.7）を先に作ることにした。それまでは 15 分ごとの再ログインを許容する
 
 ---
 
@@ -53,7 +54,9 @@
 
 ```mermaid
 flowchart TB
-    Client["クライアント<br/>（今回は未実装 / curl・Postman）"]
+    Client["クライアント<br/>（ブラウザ / curl・Postman）"]
+
+    Web["<b>web :8084</b><br/>BFF・グラフ外<br/>html/template"]
 
     subgraph Edge["エッジ層（Envoy :8080 / compose profile: proxy）"]
         Envoy["パスルーティング<br/>/auth/* のレート制限<br/>401 レスポンス正規化<br/>将来: TLS 終端・メトリクス"]
@@ -79,6 +82,10 @@ flowchart TB
     Client -->|"/auth/* · /graphql"| Envoy
     Envoy -->|"/auth/*"| Auth
     Envoy -->|"/graphql"| Router
+    Envoy -->|"/（その他）"| Web
+    Client -. "profile 無効時は :8084 に直結" .-> Web
+    Web -->|"/auth/login・signup"| Auth
+    Web -->|"/graphql<br/>Cookie のトークンを転送"| Router
     Client -. "profile 無効時は :8083 に直結" .-> Auth
     Client -. "profile 無効時は :3002 に直結" .-> Router
     Router -. "JWKS 取得<br/>refresh_interval: 1m" .-> Auth
@@ -99,6 +106,7 @@ flowchart TB
 | `auth` | **しない**（REST） | `credentials`（id, email, password_hash） | アカウント登録、ログイン、JWT 発行、JWKS 公開 |
 | `user` サブグラフ | する | `User`（`id`, `displayName`, `createdAt`） | プロフィール管理、JIT provisioning |
 | `todo` サブグラフ | する | `Todo` 全体、`User.todos` の拡張 | TODO の CRUD |
+| `web` | **しない**（BFF） | なし（DB を持たない） | 画面の描画、セッション Cookie の管理（§4.7） |
 
 `User` は user サブグラフが所有し、todo サブグラフは `@key(fields: "id")` で
 スタブとして参照しつつ `todos` フィールドを **追加** する。これにより
@@ -256,6 +264,7 @@ input UpdateTodoInput {
 type Query {
   todo(id: ID!): Todo @authenticated
   todos(filter: TodoFilter): [Todo!]! @authenticated
+  todoConnection(filter: TodoFilter, first: Int = 20, after: String): TodoConnection! @authenticated  # §4.6
 }
 
 type Mutation {
@@ -317,11 +326,79 @@ models:
       - github.com/99designs/gqlgen/graphql.Time
 ```
 
-### 4.6 ページネーション（将来の拡張）
+### 4.6 ページネーション
 
-今回は `[Todo!]!` をそのまま返す。件数が増えた時点で Relay Cursor Connection
-（`TodoConnection` / `TodoEdge` / `PageInfo`）へ移行する。カーソルは
-`(created_at, id)` の複合キーを base64 エンコードしたものを想定。
+Web フロントエンドの Infinite スクロール（§4.7）のために、Relay Cursor Connection 形式の
+`todoConnection` を追加した。既存の `todos`（全件を `[Todo!]!` で返す）は、シードや
+動作確認の手順が使っているので残している。
+
+```graphql
+type TodoConnection { edges: [TodoEdge!]!  pageInfo: PageInfo! }
+type TodoEdge { cursor: String!  node: Todo! }
+type PageInfo { hasNextPage: Boolean!  endCursor: String }
+
+todoConnection(filter: TodoFilter, first: Int = 20, after: String): TodoConnection! @authenticated
+```
+
+- 並び順は `(created_at, id)` の降順。`created_at` が同じ行があっても順序が一意に決まる。
+- カーソルは `created_at（RFC3339Nano）|id` を base64url にしたもの。クライアントには中身の
+  分からない文字列として扱わせる。デコードできないカーソルは `BAD_USER_INPUT`。
+- `first` は 1〜100。範囲外は `BAD_USER_INPUT`。
+- `first + 1` 件を取得し、余った 1 件があれば `hasNextPage: true`。
+- クエリ（`ListTodosPage`）も他と同じく `user_id` で絞る（§6.7-1）。他人のカーソルを
+  渡されても、絞り込みの開始位置が変わるだけで他人の行は返らない。
+- offset ではなく keyset 方式にしたのは、スクロール中に先頭へ行が追加されても
+  重複や取りこぼしが起きないようにするため。
+
+### 4.7 Web フロントエンド（`services/web`）
+
+Go 標準の `html/template` でサーバー描画する BFF。auth と同じく GraphQL グラフには
+参加せず、auth の REST と Router の GraphQL をサーバー側から呼ぶ。
+
+| メソッド | パス | 内容 |
+| --- | --- | --- |
+| GET / POST | `/login`, `/signup` | フォーム表示 / auth を呼び、成功したら Cookie を設定して `/` へ |
+| POST | `/logout` | Cookie を削除して `/login` へ |
+| GET | `/` | 未完了（`status: TODO`）の一覧と追加フォーム。DONE は表示しない |
+| GET | `/todos/page?after=` | 一覧の続き。HTML 断片だけを返す（Infinite スクロール用） |
+| POST | `/todos` | 作成 |
+| GET / POST | `/todos/{id}/edit`, `/todos/{id}` | 編集フォーム / 更新 |
+| POST | `/todos/{id}/done`, `/todos/{id}/delete` | 完了（一覧から消える）/ 削除 |
+
+HTML フォームは GET と POST しか送れないため、更新系はすべて POST にしている。
+
+**認可はバックエンドに任せる。** web はユーザー ID を扱わない（URL にもフォームにも出さない）。
+他人の TODO の ID を URL に入れると、Router が `NOT_FOUND` を返すので、そのまま 404 画面にする。
+web 側で「自分の TODO か」を判定する処理は追加しない。判定する箇所をバックエンドだけにしておくため。
+
+**セッション。** auth が発行したアクセストークンを、そのまま Cookie に入れる。
+
+| 属性 | 値 | 理由 |
+| --- | --- | --- |
+| `HttpOnly` | true | ブラウザの JS からトークンを読めないようにする（XSS 対策） |
+| `SameSite` | `Strict` | 他サイトからのリクエストに Cookie を付けない（CSRF 対策の一層目） |
+| `Secure` | `COOKIE_SECURE`（開発は false） | 本番の HTTPS では true にする |
+| `Max-Age` | トークンの `expiresIn` | 期限切れのトークンをブラウザに残さない |
+
+- CSRF 対策の二層目として、POST では `Origin`（無ければ `Referer`）が自分自身のホストかを確かめる。
+  どちらも無い POST は拒否する。
+- ログインが必要なページはすべて `Cache-Control: no-store` にする。ログアウト後にブラウザの
+  「戻る」で、キャッシュされた一覧が見えてしまうのを防ぐため。
+- web はトークンを自分では検証しない。Router が 401 を返したら（期限切れ・鍵の差し替え）、
+  Cookie を消して `/login` へ戻す。
+- ログアウトは Cookie を消すだけ。トークン自体は `exp` まで有効なまま残る。
+  失効させる手段はリフレッシュトークン（§12-1）を入れるまで無い（§6.1）。
+
+**Infinite スクロール。** 一覧の末尾に「次へ」リンク（`/?after=<endCursor>`）を置く。
+`static/scroll.js`（外部依存なし）が `IntersectionObserver` でこのリンクを監視し、
+見えたら `/todos/page` から HTML 断片を取得して一覧の末尾に追加する。JS が無効なら、
+リンクをたどって次のページへ移る。
+
+**見た目。** CSS はレイアウト内の数行だけ。色相は使わず、黒からグレーの濃淡だけで表現する。
+
+**Envoy 経由のログイン。** web は auth を内部ネットワークで直接呼ぶ。そのため Envoy の
+`/auth/login` のレート制限が効かない。web の `POST /login`・`POST /signup` にも同じ制限
+（5 req/min）を Envoy でかける（§8.5）。
 
 ---
 
@@ -1027,7 +1104,17 @@ graphql-todo/
     │       ├── apperr/            # extensions.code 付きの GraphQL エラー
     │       ├── db/                # sqlc 生成物
     │       └── service/           # provisioning.go を含む
-    └── todo/                      # user と同じ構成
+    ├── todo/                      # user と同じ構成
+    └── web/                       # ★ グラフに参加しない BFF（§4.7）
+        ├── go.mod                 # 標準ライブラリのみ
+        ├── Dockerfile
+        ├── cmd/server/main.go
+        ├── internal/
+        │   ├── config/
+        │   ├── backend/           # auth（REST）と Router（GraphQL）のクライアント
+        │   ├── session/           # トークンを入れる Cookie
+        │   └── handler/           # ルーティング・画面
+        └── web/                   # embed する templates/ と static/
 ```
 
 ### 実装で設計書から変更した点
@@ -1066,6 +1153,7 @@ graphql-todo/
 | `todo-subgraph` | ローカルビルド | 8082 | GraphQL + `/health` |
 | `router-compose` | `node:22-alpine` | - | one-shot。`npx wgc router compose -i /work/graph.yaml -o /work/router.json` |
 | `router` | `ghcr.io/wundergraph/cosmo/router` | 3002, 8088 | Federation Router + Prometheus |
+| **`web`** | ローカルビルド | **8084** | Web フロントエンド（BFF）+ `/health` |
 | `envoy` | `envoyproxy/envoy:v1.31-latest` | 8080, 9901 | **profile: `proxy`** |
 
 ### 8.2 起動順序
@@ -1079,6 +1167,8 @@ flowchart LR
     SG --> RC[router-compose<br/>introspect → router.json]
     RC --> RT[router]
     AU -.->|JWKS| RT
+    RT --> WEB[web<br/>healthcheck: /health]
+    AU --> WEB
     RT --> SEED[scripts/seed.sh<br/>API 経由でシード投入]
     RT -.-> EV[envoy<br/>profile: proxy]
 ```
@@ -1127,10 +1217,10 @@ Schema Registry を使う `wgc router fetch` に切り替えるのが公式の�
 
 認証をグラフの外に出したことで、入口が 2 つになった。
 
-| 起動方法 | ログイン | GraphQL |
-| --- | --- | --- |
-| `docker compose up -d`（Envoy 無し） | `http://localhost:8083/auth/login` | `http://localhost:3002/graphql` |
-| `docker compose --profile proxy up -d` | `http://localhost:8080/auth/login` | `http://localhost:8080/graphql` |
+| 起動方法 | ブラウザ | ログイン（API） | GraphQL |
+| --- | --- | --- | --- |
+| `docker compose up -d`（Envoy 無し） | `http://localhost:8084/` | `http://localhost:8083/auth/login` | `http://localhost:3002/graphql` |
+| `docker compose --profile proxy up -d` | `http://localhost:8080/` | `http://localhost:8080/auth/login` | `http://localhost:8080/graphql` |
 
 本番では必ず単一の入口（ALB / Envoy）にパスで振り分ける。開発で 2 ポートを
 許容しているのは、Envoy を必須にすると起動が重くなるため
@@ -1146,6 +1236,8 @@ Schema Registry を使う `wgc router fetch` に切り替えるのが公式の�
 | `/auth/login`, `/auth/signup` | auth サービス | **IP あたり 5 req/min のレート制限**（ブルートフォース対策） |
 | `/.well-known/jwks.json` | auth サービス | レート制限なし |
 | `/graphql` | Cosmo Router | — |
+| `POST /login`, `POST /signup` | web | auth と同じ 5 req/min のレート制限（§4.7） |
+| `/`（上記以外） | web | — |
 | （共通） | — | **401 レスポンスボディの正規化**（§6.8-#9）、アクセスログ、admin(:9901) |
 
 ログインのレート制限は、認証がグラフ内にあった頃は実質不可能だった
@@ -1168,7 +1260,8 @@ profile を有効にしない場合、パスルーティングと 401 正規化�
 | `make up-proxy` | Envoy 込みで起動してシード投入 |
 | `make seed` | シードデータの投入のみ（冪等） |
 | `make down` | `docker compose down -v` |
-| `make sqlc` | 3 サービスの sqlc generate |
+| `make build` / `make test` | 全サービス（web を含む 4 つ）の go build / go test |
+| `make sqlc` | 3 サービスの sqlc generate（DB を持たない web は対象外） |
 | `make gqlgen` | 2 サブグラフの gqlgen generate |
 | `make router` | `router.json` を再生成し router を再起動 |
 | `make migrate-new NAME=xxx SVC=todo` | マイグレーションファイルの雛形生成 |
@@ -1277,6 +1370,7 @@ gqlgen の `ErrorPresenter` で内部エラーの詳細をクライアントに�
 | リポジトリ | sqlc クエリ（特に `user_id` 絞り込み、`ON CONFLICT DO NOTHING`） | testcontainers-go で実 PostgreSQL を起動 |
 | サービス結合 | auth の REST ハンドラ | `httptest` |
 | サブグラフ結合 | resolver + DB | `client.New(handler)`（gqlgen のテストクライアント） |
+| Web | セッション必須・no-store・401 時の Cookie 削除・CSRF・HTML エスケープ | `httptest` と偽の Router（`services/web/internal/handler`。実装済み） |
 | Federation E2E | Router 経由のクロスサブグラフクエリ、JIT provisioning | compose 起動 → HTTP で検証 |
 | 認可の回帰 | §6.8 のポリシー表の全ケース | E2E に含め、CI で必ず実行 |
 
@@ -1357,9 +1451,9 @@ flowchart LR
 
 | # | 項目 | 備考 |
 | --- | --- | --- |
-| 1 | **リフレッシュトークン**（優先度: 高） | アクセストークンを 15 分にしたため、FE クライアントには必須（§6.1）。auth サービスに `POST /auth/refresh` と `auth_db.refresh_tokens` テーブルを追加し、使用時ローテーション（1 回使ったら新しい値に差し替え、再利用を検知したらそのユーザーの全トークンを失効）を入れる。§6.8-#9 の「失敗理由を区別しない」方針の再検討とセット |
+| 1 | **リフレッシュトークン**（優先度: 高） | アクセストークンを 15 分にしたため、FE クライアントには必須（§6.1）。Web フロントエンド（§4.7）は先に実装したため、現状は 15 分ごとに再ログインになる。auth サービスに `POST /auth/refresh` と `auth_db.refresh_tokens` テーブルを追加し、使用時ローテーション（1 回使ったら新しい値に差し替え、再利用を検知したらそのユーザーの全トークンを失効）を入れる。§6.8-#9 の「失敗理由を区別しない」方針の再検討とセット |
 | 2 | ログアウト / トークン失効 | #1 を実装すれば**同時に解決する**。リフレッシュトークンは `auth_db` に行として存在するため、ログアウト＝該当行の DELETE。アクセストークンは最大 15 分で自然に切れる。`jti` ブロックリスト（＝実質 Redis が必要）を入れずに済み、「キャッシュサーバー不要」の前提とも衝突しない |
-| 3 | ページネーション | Relay Cursor Connection へ移行（§4.6） |
+| 3 | ページネーション | `todoConnection` を追加済み（§4.6）。`User.todos` と `todos` は全件返しのまま |
 | 4 | TODO の共有機能 | 実装すると認可が「所有者のみ」から ACL に変わり、設計の前提が大きく動く |
 | 5 | DataLoader | `Todo.user` の N+1 は Router がバッチ化するが、サブグラフ内の N+1 は gqlgen の dataloader が必要 |
 | 6 | Subscription | Cosmo は WebSocket / SSE 経由の Federated Subscription に対応。Redis 不要の構成で可能か要調査 |
