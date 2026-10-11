@@ -34,3 +34,17 @@ RETURNING *;
 -- name: DeleteTodo :execrows
 DELETE FROM todos
 WHERE id = $1 AND user_id = $2;
+
+-- カーソルページング（design.md §4.6）。並びは (created_at, id) の降順で一意に決まる。
+-- after_* が NULL なら先頭ページ。LIMIT は呼び出し側で first+1 を渡し、
+-- 余った 1 件の有無で hasNextPage を判定する。
+-- name: ListTodosPage :many
+SELECT * FROM todos
+WHERE user_id = @user_id
+  AND (sqlc.narg('status')::todo_status IS NULL OR status = sqlc.narg('status'))
+  AND (sqlc.narg('due_before')::date IS NULL OR due_date < sqlc.narg('due_before'))
+  AND (sqlc.narg('after_created_at')::timestamptz IS NULL
+       OR created_at < sqlc.narg('after_created_at')
+       OR (created_at = sqlc.narg('after_created_at') AND id < sqlc.narg('after_id')::uuid))
+ORDER BY created_at DESC, id DESC
+LIMIT @lim;

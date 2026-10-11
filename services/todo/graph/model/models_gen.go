@@ -19,6 +19,11 @@ type CreateTodoInput struct {
 type Mutation struct {
 }
 
+type PageInfo struct {
+	HasNextPage bool    `json:"hasNextPage"`
+	EndCursor   *string `json:"endCursor,omitempty"`
+}
+
 type Query struct {
 }
 
@@ -35,6 +40,17 @@ type Todo struct {
 }
 
 func (Todo) IsEntity() {}
+
+// カーソルページング（design.md §4.6）。並びは作成日時の新しい順。
+type TodoConnection struct {
+	Edges    []*TodoEdge `json:"edges"`
+	PageInfo *PageInfo   `json:"pageInfo"`
+}
+
+type TodoEdge struct {
+	Cursor string `json:"cursor"`
+	Node   *Todo  `json:"node"`
+}
 
 type TodoFilter struct {
 	Status    *TodoStatus `json:"status,omitempty"`

@@ -7,6 +7,7 @@ import (
 
 	"github.com/kayawari/graphql-todo/services/todo/graph/model"
 	"github.com/kayawari/graphql-todo/services/todo/internal/db"
+	"github.com/kayawari/graphql-todo/services/todo/internal/service"
 )
 
 func toTodoModel(t db.Todo) *model.Todo {
@@ -40,6 +41,20 @@ func toTodoModels(ts []db.Todo) []*model.Todo {
 		out = append(out, toTodoModel(t))
 	}
 	return out
+}
+
+// toTodoConnection も edges を必ず非 nil にする（toTodoModels と同じ理由）。
+func toTodoConnection(ts []db.Todo, hasNext bool) *model.TodoConnection {
+	conn := &model.TodoConnection{
+		Edges:    make([]*model.TodoEdge, 0, len(ts)),
+		PageInfo: &model.PageInfo{HasNextPage: hasNext},
+	}
+	for _, t := range ts {
+		c := encodeCursor(service.Cursor{CreatedAt: t.CreatedAt.Time, ID: t.ID})
+		conn.Edges = append(conn.Edges, &model.TodoEdge{Cursor: c, Node: toTodoModel(t)})
+		conn.PageInfo.EndCursor = &c
+	}
+	return conn
 }
 
 func toDBStatus(s *model.TodoStatus) *db.TodoStatus {

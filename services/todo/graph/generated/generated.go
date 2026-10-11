@@ -51,8 +51,14 @@ type ComplexityRoot struct {
 		UpdateTodo func(childComplexity int, id string, input model.UpdateTodoInput) int
 	}
 
+	PageInfo struct {
+		EndCursor   func(childComplexity int) int
+		HasNextPage func(childComplexity int) int
+	}
+
 	Query struct {
 		Todo               func(childComplexity int, id string) int
+		TodoConnection     func(childComplexity int, filter *model.TodoFilter, first *int, after *string) int
 		Todos              func(childComplexity int, filter *model.TodoFilter) int
 		__resolve__service func(childComplexity int) int
 		__resolve_entities func(childComplexity int, representations []map[string]any) int
@@ -67,6 +73,16 @@ type ComplexityRoot struct {
 		Title       func(childComplexity int) int
 		UpdatedAt   func(childComplexity int) int
 		User        func(childComplexity int) int
+	}
+
+	TodoConnection struct {
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
+	}
+
+	TodoEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
 	}
 
 	User struct {
@@ -95,6 +111,7 @@ type MutationResolver interface {
 type QueryResolver interface {
 	Todo(ctx context.Context, id string) (*model.Todo, error)
 	Todos(ctx context.Context, filter *model.TodoFilter) ([]*model.Todo, error)
+	TodoConnection(ctx context.Context, filter *model.TodoFilter, first *int, after *string) (*model.TodoConnection, error)
 }
 type UserResolver interface {
 	Todos(ctx context.Context, obj *model.User, status *model.TodoStatus) ([]*model.Todo, error)
@@ -175,6 +192,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.UpdateTodo(childComplexity, args["id"].(string), args["input"].(model.UpdateTodoInput)), true
 
+	case "PageInfo.endCursor":
+		if e.ComplexityRoot.PageInfo.EndCursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PageInfo.EndCursor(childComplexity), true
+	case "PageInfo.hasNextPage":
+		if e.ComplexityRoot.PageInfo.HasNextPage == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PageInfo.HasNextPage(childComplexity), true
+
 	case "Query.todo":
 		if e.ComplexityRoot.Query.Todo == nil {
 			break
@@ -186,6 +216,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Todo(childComplexity, args["id"].(string)), true
+	case "Query.todoConnection":
+		if e.ComplexityRoot.Query.TodoConnection == nil {
+			break
+		}
+
+		args, err := ec.field_Query_todoConnection_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.TodoConnection(childComplexity, args["filter"].(*model.TodoFilter), args["first"].(*int), args["after"].(*string)), true
 	case "Query.todos":
 		if e.ComplexityRoot.Query.Todos == nil {
 			break
@@ -263,6 +304,32 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Todo.User(childComplexity), true
+
+	case "TodoConnection.edges":
+		if e.ComplexityRoot.TodoConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TodoConnection.Edges(childComplexity), true
+	case "TodoConnection.pageInfo":
+		if e.ComplexityRoot.TodoConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TodoConnection.PageInfo(childComplexity), true
+
+	case "TodoEdge.cursor":
+		if e.ComplexityRoot.TodoEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TodoEdge.Cursor(childComplexity), true
+	case "TodoEdge.node":
+		if e.ComplexityRoot.TodoEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TodoEdge.Node(childComplexity), true
 
 	case "User.id":
 		if e.ComplexityRoot.User.ID == nil {
@@ -406,6 +473,24 @@ type User @key(fields: "id") {
   todos(status: TodoStatus): [Todo!]! @authenticated
 }
 
+"""
+カーソルページング（design.md §4.6）。並びは作成日時の新しい順。
+"""
+type TodoConnection {
+  edges: [TodoEdge!]!
+  pageInfo: PageInfo!
+}
+
+type TodoEdge {
+  cursor: String!
+  node: Todo!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  endCursor: String
+}
+
 input TodoFilter {
   status: TodoStatus
   dueBefore: Time
@@ -427,6 +512,8 @@ input UpdateTodoInput {
 type Query {
   todo(id: ID!): Todo @authenticated
   todos(filter: TodoFilter): [Todo!]! @authenticated
+  """first は 1〜100。after には前ページの pageInfo.endCursor を渡す。"""
+  todoConnection(filter: TodoFilter, first: Int = 20, after: String): TodoConnection! @authenticated
 }
 
 type Mutation {
@@ -513,6 +600,16 @@ var parsedSchema = gqlparser.MustLoadSchema(sources...)
 // Each function is generated once per unique object type, deduplicating the
 // switch statements that were previously inlined in every fieldContext_* function.
 
+func (ec *executionContext) childFields_PageInfo(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "hasNextPage":
+		return ec.fieldContext_PageInfo_hasNextPage(ctx, field)
+	case "endCursor":
+		return ec.fieldContext_PageInfo_endCursor(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type PageInfo", field.Name)
+}
+
 func (ec *executionContext) childFields_Todo(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "id":
@@ -533,6 +630,26 @@ func (ec *executionContext) childFields_Todo(ctx context.Context, field graphql.
 		return ec.fieldContext_Todo_user(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Todo", field.Name)
+}
+
+func (ec *executionContext) childFields_TodoConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "edges":
+		return ec.fieldContext_TodoConnection_edges(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_TodoConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TodoConnection", field.Name)
+}
+
+func (ec *executionContext) childFields_TodoEdge(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "cursor":
+		return ec.fieldContext_TodoEdge_cursor(ctx, field)
+	case "node":
+		return ec.fieldContext_TodoEdge_node(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TodoEdge", field.Name)
 }
 
 func (ec *executionContext) childFields_User(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -702,7 +819,7 @@ func (ec *executionContext) field_Mutation_createTodo_args(ctx context.Context, 
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.CreateTodoInput, error) {
-			return ec.unmarshalNCreateTodoInput2githubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐCreateTodoInput(ctx, v)
+			return ec.unmarshalNCreateTodoInput2githubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐCreateTodoInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -738,7 +855,7 @@ func (ec *executionContext) field_Mutation_updateTodo_args(ctx context.Context, 
 	args["id"] = arg0
 	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.UpdateTodoInput, error) {
-			return ec.unmarshalNUpdateTodoInput2githubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐUpdateTodoInput(ctx, v)
+			return ec.unmarshalNUpdateTodoInput2githubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐUpdateTodoInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -775,6 +892,36 @@ func (ec *executionContext) field_Query__entities_args(ctx context.Context, rawA
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_todoConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
+		func(ctx context.Context, v any) (*model.TodoFilter, error) {
+			return ec.unmarshalOTodoFilter2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoFilter(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["filter"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "first",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["first"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "after",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["after"] = arg2
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_todo_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -794,7 +941,7 @@ func (ec *executionContext) field_Query_todos_args(ctx context.Context, rawArgs 
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
 		func(ctx context.Context, v any) (*model.TodoFilter, error) {
-			return ec.unmarshalOTodoFilter2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoFilter(ctx, v)
+			return ec.unmarshalOTodoFilter2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoFilter(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -808,7 +955,7 @@ func (ec *executionContext) field_User_todos_args(ctx context.Context, rawArgs m
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "status",
 		func(ctx context.Context, v any) (*model.TodoStatus, error) {
-			return ec.unmarshalOTodoStatus2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx, v)
+			return ec.unmarshalOTodoStatus2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -891,7 +1038,7 @@ func (ec *executionContext) _Entity_findTodoByID(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.Todo) graphql.Marshaler {
-			return ec.marshalNTodo2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx, selections, v)
+			return ec.marshalNTodo2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx, selections, v)
 		},
 		true,
 		true,
@@ -935,7 +1082,7 @@ func (ec *executionContext) _Entity_findUserByID(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.User) graphql.Marshaler {
-			return ec.marshalNUser2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐUser(ctx, selections, v)
+			return ec.marshalNUser2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐUser(ctx, selections, v)
 		},
 		true,
 		true,
@@ -979,7 +1126,7 @@ func (ec *executionContext) _Mutation_createTodo(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.Todo) graphql.Marshaler {
-			return ec.marshalNTodo2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx, selections, v)
+			return ec.marshalNTodo2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx, selections, v)
 		},
 		true,
 		true,
@@ -1023,7 +1170,7 @@ func (ec *executionContext) _Mutation_updateTodo(ctx context.Context, field grap
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.Todo) graphql.Marshaler {
-			return ec.marshalNTodo2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx, selections, v)
+			return ec.marshalNTodo2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx, selections, v)
 		},
 		true,
 		true,
@@ -1097,6 +1244,52 @@ func (ec *executionContext) fieldContext_Mutation_deleteTodo(ctx context.Context
 	return fc, nil
 }
 
+func (ec *executionContext) _PageInfo_hasNextPage(ctx context.Context, field graphql.CollectedField, obj *model.PageInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PageInfo_hasNextPage(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.HasNextPage, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PageInfo_hasNextPage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PageInfo", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _PageInfo_endCursor(ctx context.Context, field graphql.CollectedField, obj *model.PageInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PageInfo_endCursor(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.EndCursor, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_PageInfo_endCursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PageInfo", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _Query_todo(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1111,7 +1304,7 @@ func (ec *executionContext) _Query_todo(ctx context.Context, field graphql.Colle
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.Todo) graphql.Marshaler {
-			return ec.marshalOTodo2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx, selections, v)
+			return ec.marshalOTodo2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx, selections, v)
 		},
 		true,
 		false,
@@ -1155,7 +1348,7 @@ func (ec *executionContext) _Query_todos(ctx context.Context, field graphql.Coll
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*model.Todo) graphql.Marshaler {
-			return ec.marshalNTodo2ᚕᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoᚄ(ctx, selections, v)
+			return ec.marshalNTodo2ᚕᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -1179,6 +1372,50 @@ func (ec *executionContext) fieldContext_Query_todos(ctx context.Context, field 
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_todos_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_todoConnection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_todoConnection(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().TodoConnection(ctx, fc.Args["filter"].(*model.TodoFilter), fc.Args["first"].(*int), fc.Args["after"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.TodoConnection) graphql.Marshaler {
+			return ec.marshalNTodoConnection2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoConnection(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_todoConnection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TodoConnection(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_todoConnection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -1419,7 +1656,7 @@ func (ec *executionContext) _Todo_status(ctx context.Context, field graphql.Coll
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v model.TodoStatus) graphql.Marshaler {
-			return ec.marshalNTodoStatus2githubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx, selections, v)
+			return ec.marshalNTodoStatus2githubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx, selections, v)
 		},
 		true,
 		true,
@@ -1511,7 +1748,7 @@ func (ec *executionContext) _Todo_user(ctx context.Context, field graphql.Collec
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.User) graphql.Marshaler {
-			return ec.marshalNUser2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐUser(ctx, selections, v)
+			return ec.marshalNUser2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐUser(ctx, selections, v)
 		},
 		true,
 		true,
@@ -1525,6 +1762,125 @@ func (ec *executionContext) fieldContext_Todo_user(_ context.Context, field grap
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_User(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TodoConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.TodoConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TodoConnection_edges(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Edges, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.TodoEdge) graphql.Marshaler {
+			return ec.marshalNTodoEdge2ᚕᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoEdgeᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TodoConnection_edges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TodoConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TodoEdge(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TodoConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.TodoConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TodoConnection_pageInfo(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PageInfo, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.PageInfo) graphql.Marshaler {
+			return ec.marshalNPageInfo2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐPageInfo(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TodoConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TodoConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_PageInfo(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TodoEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.TodoEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TodoEdge_cursor(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Cursor, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TodoEdge_cursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TodoEdge", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TodoEdge_node(ctx context.Context, field graphql.CollectedField, obj *model.TodoEdge) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TodoEdge_node(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Node, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Todo) graphql.Marshaler {
+			return ec.marshalNTodo2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TodoEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TodoEdge",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Todo(ctx, field)
 		},
 	}
 	return fc, nil
@@ -1567,7 +1923,7 @@ func (ec *executionContext) _User_todos(ctx context.Context, field graphql.Colle
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v []*model.Todo) graphql.Marshaler {
-			return ec.marshalNTodo2ᚕᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoᚄ(ctx, selections, v)
+			return ec.marshalNTodo2ᚕᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -2743,7 +3099,7 @@ func (ec *executionContext) unmarshalInputTodoFilter(ctx context.Context, obj an
 		switch k {
 		case "status":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("status"))
-			data, err := ec.unmarshalOTodoStatus2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx, v)
+			data, err := ec.unmarshalOTodoStatus2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -2794,7 +3150,7 @@ func (ec *executionContext) unmarshalInputUpdateTodoInput(ctx context.Context, o
 			it.Description = data
 		case "status":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("status"))
-			data, err := ec.unmarshalOTodoStatus2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx, v)
+			data, err := ec.unmarshalOTodoStatus2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -2993,6 +3349,49 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 	return out
 }
 
+var pageInfoImplementors = []string{"PageInfo"}
+
+func (ec *executionContext) _PageInfo(ctx context.Context, sel ast.SelectionSet, obj *model.PageInfo) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, pageInfoImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("PageInfo")
+		case "hasNextPage":
+			out.Values[i] = ec._PageInfo_hasNextPage(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "endCursor":
+			out.Values[i] = ec._PageInfo_endCursor(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var queryImplementors = []string{"Query"}
 
 func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) graphql.Marshaler {
@@ -3045,6 +3444,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_todos(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "todoConnection":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_todoConnection(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -3185,6 +3606,92 @@ func (ec *executionContext) _Todo(ctx context.Context, sel ast.SelectionSet, obj
 			}
 		case "user":
 			out.Values[i] = ec._Todo_user(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var todoConnectionImplementors = []string{"TodoConnection"}
+
+func (ec *executionContext) _TodoConnection(ctx context.Context, sel ast.SelectionSet, obj *model.TodoConnection) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, todoConnectionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TodoConnection")
+		case "edges":
+			out.Values[i] = ec._TodoConnection_edges(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pageInfo":
+			out.Values[i] = ec._TodoConnection_pageInfo(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var todoEdgeImplementors = []string{"TodoEdge"}
+
+func (ec *executionContext) _TodoEdge(ctx context.Context, sel ast.SelectionSet, obj *model.TodoEdge) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, todoEdgeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TodoEdge")
+		case "cursor":
+			out.Values[i] = ec._TodoEdge_cursor(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "node":
+			out.Values[i] = ec._TodoEdge_node(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -3731,7 +4238,7 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
-func (ec *executionContext) unmarshalNCreateTodoInput2githubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐCreateTodoInput(ctx context.Context, v any) (model.CreateTodoInput, error) {
+func (ec *executionContext) unmarshalNCreateTodoInput2githubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐCreateTodoInput(ctx context.Context, v any) (model.CreateTodoInput, error) {
 	res, err := ec.unmarshalInputCreateTodoInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
@@ -3768,6 +4275,16 @@ func (ec *executionContext) marshalNID2string(ctx context.Context, sel ast.Selec
 	return res
 }
 
+func (ec *executionContext) marshalNPageInfo2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐPageInfo(ctx context.Context, sel ast.SelectionSet, v *model.PageInfo) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._PageInfo(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNString2string(ctx context.Context, v any) (string, error) {
 	res, err := graphql.UnmarshalString(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -3800,11 +4317,11 @@ func (ec *executionContext) marshalNTime2timeᚐTime(ctx context.Context, sel as
 	return res
 }
 
-func (ec *executionContext) marshalNTodo2ᚕᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Todo) graphql.Marshaler {
+func (ec *executionContext) marshalNTodo2ᚕᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Todo) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNTodo2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx, sel, v[i])
+		return ec.marshalNTodo2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -3816,7 +4333,7 @@ func (ec *executionContext) marshalNTodo2ᚕᚖgithubᚗcomᚋkayawariᚋjikken�
 	return ret
 }
 
-func (ec *executionContext) marshalNTodo2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx context.Context, sel ast.SelectionSet, v *model.Todo) graphql.Marshaler {
+func (ec *executionContext) marshalNTodo2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx context.Context, sel ast.SelectionSet, v *model.Todo) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -3826,22 +4343,58 @@ func (ec *executionContext) marshalNTodo2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋg
 	return ec._Todo(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNTodoStatus2githubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx context.Context, v any) (model.TodoStatus, error) {
+func (ec *executionContext) marshalNTodoConnection2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoConnection(ctx context.Context, sel ast.SelectionSet, v *model.TodoConnection) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._TodoConnection(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNTodoEdge2ᚕᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.TodoEdge) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNTodoEdge2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoEdge(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNTodoEdge2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoEdge(ctx context.Context, sel ast.SelectionSet, v *model.TodoEdge) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._TodoEdge(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNTodoStatus2githubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx context.Context, v any) (model.TodoStatus, error) {
 	var res model.TodoStatus
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNTodoStatus2githubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx context.Context, sel ast.SelectionSet, v model.TodoStatus) graphql.Marshaler {
+func (ec *executionContext) marshalNTodoStatus2githubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx context.Context, sel ast.SelectionSet, v model.TodoStatus) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalNUpdateTodoInput2githubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐUpdateTodoInput(ctx context.Context, v any) (model.UpdateTodoInput, error) {
+func (ec *executionContext) unmarshalNUpdateTodoInput2githubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐUpdateTodoInput(ctx context.Context, v any) (model.UpdateTodoInput, error) {
 	res, err := ec.unmarshalInputUpdateTodoInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNUser2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐUser(ctx context.Context, sel ast.SelectionSet, v *model.User) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐUser(ctx context.Context, sel ast.SelectionSet, v *model.User) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -4234,6 +4787,24 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	return res
 }
 
+func (ec *executionContext) unmarshalOInt2ᚖint(ctx context.Context, v any) (*int, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := graphql.UnmarshalInt(v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOInt2ᚖint(ctx context.Context, sel ast.SelectionSet, v *int) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	_ = sel
+	_ = ctx
+	res := graphql.MarshalInt(*v)
+	return res
+}
+
 func (ec *executionContext) unmarshalOString2string(ctx context.Context, v any) (string, error) {
 	res, err := graphql.UnmarshalString(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -4317,14 +4888,14 @@ func (ec *executionContext) marshalOTime2ᚖtimeᚐTime(ctx context.Context, sel
 	return res
 }
 
-func (ec *executionContext) marshalOTodo2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx context.Context, sel ast.SelectionSet, v *model.Todo) graphql.Marshaler {
+func (ec *executionContext) marshalOTodo2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodo(ctx context.Context, sel ast.SelectionSet, v *model.Todo) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Todo(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOTodoFilter2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoFilter(ctx context.Context, v any) (*model.TodoFilter, error) {
+func (ec *executionContext) unmarshalOTodoFilter2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoFilter(ctx context.Context, v any) (*model.TodoFilter, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -4332,7 +4903,7 @@ func (ec *executionContext) unmarshalOTodoFilter2ᚖgithubᚗcomᚋkayawariᚋji
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOTodoStatus2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx context.Context, v any) (*model.TodoStatus, error) {
+func (ec *executionContext) unmarshalOTodoStatus2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx context.Context, v any) (*model.TodoStatus, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -4341,7 +4912,7 @@ func (ec *executionContext) unmarshalOTodoStatus2ᚖgithubᚗcomᚋkayawariᚋji
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOTodoStatus2ᚖgithubᚗcomᚋkayawariᚋjikkenᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx context.Context, sel ast.SelectionSet, v *model.TodoStatus) graphql.Marshaler {
+func (ec *executionContext) marshalOTodoStatus2ᚖgithubᚗcomᚋkayawariᚋgraphqlᚑtodoᚋservicesᚋtodoᚋgraphᚋmodelᚐTodoStatus(ctx context.Context, sel ast.SelectionSet, v *model.TodoStatus) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}

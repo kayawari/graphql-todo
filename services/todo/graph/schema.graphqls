@@ -29,6 +29,24 @@ type User @key(fields: "id") {
   todos(status: TodoStatus): [Todo!]! @authenticated
 }
 
+"""
+カーソルページング（design.md §4.6）。並びは作成日時の新しい順。
+"""
+type TodoConnection {
+  edges: [TodoEdge!]!
+  pageInfo: PageInfo!
+}
+
+type TodoEdge {
+  cursor: String!
+  node: Todo!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  endCursor: String
+}
+
 input TodoFilter {
   status: TodoStatus
   dueBefore: Time
@@ -50,6 +68,8 @@ input UpdateTodoInput {
 type Query {
   todo(id: ID!): Todo @authenticated
   todos(filter: TodoFilter): [Todo!]! @authenticated
+  """first は 1〜100。after には前ページの pageInfo.endCursor を渡す。"""
+  todoConnection(filter: TodoFilter, first: Int = 20, after: String): TodoConnection! @authenticated
 }
 
 type Mutation {
