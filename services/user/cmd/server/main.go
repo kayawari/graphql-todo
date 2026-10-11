@@ -22,12 +22,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vektah/gqlparser/v2/ast"
 
-	"github.com/kayawari/jikken/graphql-todo/services/user/graph"
-	"github.com/kayawari/jikken/graphql-todo/services/user/graph/generated"
-	"github.com/kayawari/jikken/graphql-todo/services/user/internal/auth"
-	"github.com/kayawari/jikken/graphql-todo/services/user/internal/config"
-	"github.com/kayawari/jikken/graphql-todo/services/user/internal/db"
-	"github.com/kayawari/jikken/graphql-todo/services/user/internal/service"
+	"github.com/kayawari/graphql-todo/services/user/graph"
+	"github.com/kayawari/graphql-todo/services/user/graph/generated"
+	"github.com/kayawari/graphql-todo/services/user/internal/auth"
+	"github.com/kayawari/graphql-todo/services/user/internal/config"
+	"github.com/kayawari/graphql-todo/services/user/internal/db"
+	"github.com/kayawari/graphql-todo/services/user/internal/service"
 )
 
 func main() {

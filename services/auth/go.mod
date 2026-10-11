@@ -1,4 +1,4 @@
-module github.com/kayawari/jikken/graphql-todo/services/auth
+module github.com/kayawari/graphql-todo/services/auth
 
 go 1.26.1
 

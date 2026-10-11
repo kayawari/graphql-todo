@@ -137,6 +137,66 @@ func (q *Queries) ListTodos(ctx context.Context, arg ListTodosParams) ([]Todo, e
 	return items, nil
 }
 
+const listTodosPage = `-- name: ListTodosPage :many
+SELECT id, user_id, title, description, status, due_date, created_at, updated_at FROM todos
+WHERE user_id = $1
+  AND ($2::todo_status IS NULL OR status = $2)
+  AND ($3::date IS NULL OR due_date < $3)
+  AND ($4::timestamptz IS NULL
+       OR created_at < $4
+       OR (created_at = $4 AND id < $5::uuid))
+ORDER BY created_at DESC, id DESC
+LIMIT $6
+`
+
+type ListTodosPageParams struct {
+	UserID         uuid.UUID
+	Status         *TodoStatus
+	DueBefore      pgtype.Date
+	AfterCreatedAt pgtype.Timestamptz
+	AfterID        pgtype.UUID
+	Lim            int32
+}
+
+// カーソルページング（design.md §4.6）。並びは (created_at, id) の降順で一意に決まる。
+// after_* が NULL なら先頭ページ。LIMIT は呼び出し側で first+1 を渡し、
+// 余った 1 件の有無で hasNextPage を判定する。
+func (q *Queries) ListTodosPage(ctx context.Context, arg ListTodosPageParams) ([]Todo, error) {
+	rows, err := q.db.Query(ctx, listTodosPage,
+		arg.UserID,
+		arg.Status,
+		arg.DueBefore,
+		arg.AfterCreatedAt,
+		arg.AfterID,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Todo
+	for rows.Next() {
+		var i Todo
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateTodo = `-- name: UpdateTodo :one
 UPDATE todos
 SET title       = COALESCE($1, title),

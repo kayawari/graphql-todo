@@ -11,13 +11,13 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-
-	"github.com/kayawari/jikken/graphql-todo/services/todo/graph/generated"
-	"github.com/kayawari/jikken/graphql-todo/services/todo/graph/model"
-	"github.com/kayawari/jikken/graphql-todo/services/todo/internal/apperr"
-	"github.com/kayawari/jikken/graphql-todo/services/todo/internal/auth"
-	"github.com/kayawari/jikken/graphql-todo/services/todo/internal/db"
-	"github.com/kayawari/jikken/graphql-todo/services/todo/internal/service"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/kayawari/graphql-todo/services/todo/graph/generated"
+	"github.com/kayawari/graphql-todo/services/todo/graph/model"
+	"github.com/kayawari/graphql-todo/services/todo/internal/apperr"
+	"github.com/kayawari/graphql-todo/services/todo/internal/auth"
+	"github.com/kayawari/graphql-todo/services/todo/internal/db"
+	"github.com/kayawari/graphql-todo/services/todo/internal/service"
 )
 
 // CreateTodo is the resolver for the createTodo field.
@@ -142,6 +142,45 @@ func (r *queryResolver) Todos(ctx context.Context, filter *model.TodoFilter) ([]
 		return nil, apperr.Internal(r.Log, "todos", err)
 	}
 	return toTodoModels(rows), nil
+}
+
+// TodoConnection is the resolver for the todoConnection field.
+func (r *queryResolver) TodoConnection(ctx context.Context, filter *model.TodoFilter, first *int, after *string) (*model.TodoConnection, error) {
+	v, err := auth.ViewerFromContext(ctx)
+	if err != nil {
+		return nil, apperr.Unauthenticated()
+	}
+
+	limit := 20
+	if first != nil {
+		limit = *first
+	}
+	if limit < 1 || limit > 100 {
+		return nil, apperr.BadUserInput("first must be between 1 and 100")
+	}
+
+	var cur *service.Cursor
+	if after != nil && *after != "" {
+		cur, err = decodeCursor(*after)
+		if err != nil {
+			return nil, apperr.BadUserInput("invalid cursor")
+		}
+	}
+
+	var (
+		status    *db.TodoStatus
+		dueBefore pgtype.Date
+	)
+	if filter != nil {
+		status = toDBStatus(filter.Status)
+		dueBefore = toDBDate(filter.DueBefore)
+	}
+
+	rows, hasNext, err := r.Service.ListPage(ctx, v.UserID, status, dueBefore, cur, int32(limit))
+	if err != nil {
+		return nil, apperr.Internal(r.Log, "todoConnection", err)
+	}
+	return toTodoConnection(rows, hasNext), nil
 }
 
 // Todos is the resolver for the todos field.

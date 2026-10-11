@@ -1,0 +1,9 @@
+{{define "content"}}
+<h2>編集</h2>
+<form method="post" action="/todos/{{.Todo.ID}}">
+  <p><label>タイトル<br><input type="text" name="title" maxlength="200" value="{{.Todo.Title}}" required></label></p>
+  <p><label>メモ<br><textarea name="description" rows="3" cols="40">{{.Todo.Description}}</textarea></label></p>
+  <p><label>期限<br><input type="date" name="dueDate" value="{{.Todo.DueDate}}"></label></p>
+  <p><button>保存</button> <a href="/">戻る</a></p>
+</form>
+{{end}}

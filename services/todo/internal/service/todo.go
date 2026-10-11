@@ -7,11 +7,13 @@ package service
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/kayawari/jikken/graphql-todo/services/todo/internal/db"
+	"github.com/kayawari/graphql-todo/services/todo/internal/db"
 )
 
 var ErrNotFound = errors.New("todo not found")
@@ -39,6 +41,37 @@ func (s *TodoService) Get(ctx context.Context, id, userID uuid.UUID) (db.Todo, e
 
 func (s *TodoService) List(ctx context.Context, p db.ListTodosParams) ([]db.Todo, error) {
 	return s.q.ListTodos(ctx, p)
+}
+
+// Cursor はページの境界。最後に返した行の (created_at, id)。
+type Cursor struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
+}
+
+// ListPage は after より後ろの最大 limit 件と、さらに続きがあるかを返す。
+// after が nil なら先頭ページ。
+func (s *TodoService) ListPage(ctx context.Context, userID uuid.UUID, status *db.TodoStatus, dueBefore pgtype.Date, after *Cursor, limit int32) ([]db.Todo, bool, error) {
+	p := db.ListTodosPageParams{
+		UserID:    userID,
+		Status:    status,
+		DueBefore: dueBefore,
+		// 1 件余分に取り、その有無で続きがあるかを判定する
+		Lim: limit + 1,
+	}
+	if after != nil {
+		p.AfterCreatedAt = pgtype.Timestamptz{Time: after.CreatedAt, Valid: true}
+		p.AfterID = pgtype.UUID{Bytes: after.ID, Valid: true}
+	}
+
+	rows, err := s.q.ListTodosPage(ctx, p)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(rows) > int(limit) {
+		return rows[:limit], true, nil
+	}
+	return rows, false, nil
 }
 
 // Update は WHERE id = $n AND user_id = $m で絞る。

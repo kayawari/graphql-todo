@@ -1,9 +1,9 @@
 # 開発環境一式（design.md §8）
 #
 # 起動順序:
-#   postgres → migrate-* → auth / サブグラフ → router-compose → router → (envoy)
+#   postgres → migrate-* → auth / サブグラフ → router-compose → router → web → (envoy)
 #
-# 通常:      docker compose up -d          クライアントは :8083 と :3002
+# 通常:      docker compose up -d          ブラウザは :8084、API クライアントは :8083 と :3002
 # Envoy 込み: docker compose --profile proxy up -d   クライアントは :8080 のみ
 
 name: graphql-todo
@@ -159,6 +159,27 @@ services:
       - "3002:3002"
       - "8088:8088"
 
+  # ---- Web フロントエンド（BFF / html/template）----
+  # グラフには参加しない。auth と Router をサーバー側から呼ぶ。
+  web:
+    build: ./services/web
+    depends_on:
+      auth: { condition: service_healthy }
+      router: { condition: service_started }
+    environment:
+      LISTEN_ADDR: ":8084"
+      AUTH_URL: http://auth:8083
+      GRAPHQL_URL: http://router:3002/graphql
+      # 開発環境は平文 HTTP。本番（HTTPS）では true にする。
+      COOKIE_SECURE: "false"
+    ports:
+      - "8084:8084"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8084/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   # ---- エッジ（オプトイン）----
   envoy:
     image: envoyproxy/envoy:v1.31-latest
@@ -166,6 +187,7 @@ services:
     depends_on:
       - router
       - auth
+      - web
     volumes:
       - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
     ports:

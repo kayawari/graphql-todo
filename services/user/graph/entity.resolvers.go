@@ -11,11 +11,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kayawari/jikken/graphql-todo/services/user/graph/generated"
-	"github.com/kayawari/jikken/graphql-todo/services/user/graph/model"
-	"github.com/kayawari/jikken/graphql-todo/services/user/internal/apperr"
-	"github.com/kayawari/jikken/graphql-todo/services/user/internal/auth"
-	"github.com/kayawari/jikken/graphql-todo/services/user/internal/service"
+	"github.com/kayawari/graphql-todo/services/user/graph/generated"
+	"github.com/kayawari/graphql-todo/services/user/graph/model"
+	"github.com/kayawari/graphql-todo/services/user/internal/apperr"
+	"github.com/kayawari/graphql-todo/services/user/internal/auth"
+	"github.com/kayawari/graphql-todo/services/user/internal/service"
 )
 
 // FindUserByID is the resolver for the findUserByID field.

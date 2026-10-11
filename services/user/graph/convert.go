@@ -1,9 +1,9 @@
 package graph
 
 import (
-	"github.com/kayawari/jikken/graphql-todo/services/user/graph/model"
-	"github.com/kayawari/jikken/graphql-todo/services/user/internal/auth"
-	"github.com/kayawari/jikken/graphql-todo/services/user/internal/db"
+	"github.com/kayawari/graphql-todo/services/user/graph/model"
+	"github.com/kayawari/graphql-todo/services/user/internal/auth"
+	"github.com/kayawari/graphql-todo/services/user/internal/db"
 )
 
 // toUserModel は DB の行を GraphQL の型に変換する。

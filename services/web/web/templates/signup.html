@@ -1,0 +1,10 @@
+{{define "content"}}
+<h2>サインアップ</h2>
+<form method="post" action="/signup">
+  <p><label>メールアドレス<br><input type="email" name="email" value="{{.Form.Email}}" required autofocus></label></p>
+  <p><label>表示名<br><input type="text" name="displayName" value="{{.Form.DisplayName}}" required></label></p>
+  <p><label>パスワード<br><input type="password" name="password" required></label></p>
+  <p><button>登録</button></p>
+</form>
+<p class="sub">登録済みの場合は <a href="/login">ログイン</a></p>
+{{end}}

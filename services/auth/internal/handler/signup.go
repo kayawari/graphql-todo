@@ -8,8 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/kayawari/jikken/graphql-todo/services/auth/internal/db"
-	"github.com/kayawari/jikken/graphql-todo/services/auth/internal/password"
+	"github.com/kayawari/graphql-todo/services/auth/internal/db"
+	"github.com/kayawari/graphql-todo/services/auth/internal/password"
 )
 
 // pgUniqueViolation は PostgreSQL の unique_violation。

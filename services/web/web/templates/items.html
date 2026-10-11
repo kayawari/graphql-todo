@@ -1,0 +1,12 @@
+{{define "items"}}{{range .Items}}
+<li>
+  <div>{{.Title}}{{if .DueDate}} <span class="sub">期限 {{.DueDate}}</span>{{end}}</div>
+  {{if .Description}}<div class="sub">{{.Description}}</div>{{end}}
+  <div>
+    <form class="inline" method="post" action="/todos/{{.ID}}/done"><button>完了</button></form>
+    <a href="/todos/{{.ID}}/edit">編集</a>
+    <form class="inline" method="post" action="/todos/{{.ID}}/delete"><button>削除</button></form>
+  </div>
+</li>{{end}}
+{{if .Next}}<li id="more-item"><a id="more" href="/?after={{.Next}}" data-page="/todos/page?after={{.Next}}">次へ</a></li>{{end}}
+{{end}}

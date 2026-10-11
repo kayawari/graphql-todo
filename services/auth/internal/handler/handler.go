@@ -14,8 +14,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kayawari/jikken/graphql-todo/services/auth/internal/db"
-	"github.com/kayawari/jikken/graphql-todo/services/auth/internal/issuer"
+	"github.com/kayawari/graphql-todo/services/auth/internal/db"
+	"github.com/kayawari/graphql-todo/services/auth/internal/issuer"
 )
 
 type Handler struct {
