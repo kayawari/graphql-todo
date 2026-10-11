@@ -24,6 +24,7 @@ make migrate-new SVC=todo NAME=add_priority
 - GraphQL スキーマ（`services/{user,todo}/graph/schema.graphqls`）を変えたら `make generate && make router`。再合成しないと Router は古いスーパーグラフのまま動く。
 - SQL（`db/<svc>/queries/*.sql` やマイグレーション）を変えたら `make sqlc`。sqlc はマイグレーションディレクトリをスキーマとして読む。マイグレーション適用は `make down && make up` が最速。
 - `make gen-keys` は意図的に冪等。`secrets/dev/jwt_private.pem` を消して再生成すると `kid` が変わり発行済みトークンが全滅する。
+- Go の書き方の規約は `.claude/rules/go.md`（Go ファイルを扱うときに自動で読み込まれる）。`go-reviewer` サブエージェントによるレビューは、ユーザーから指示があったときに実施する。
 
 ## アーキテクチャ
 
