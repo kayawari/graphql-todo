@@ -16,10 +16,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/kayawari/jikken/graphql-todo/services/auth/internal/config"
-	"github.com/kayawari/jikken/graphql-todo/services/auth/internal/db"
-	"github.com/kayawari/jikken/graphql-todo/services/auth/internal/handler"
-	"github.com/kayawari/jikken/graphql-todo/services/auth/internal/issuer"
+	"github.com/kayawari/graphql-todo/services/auth/internal/config"
+	"github.com/kayawari/graphql-todo/services/auth/internal/db"
+	"github.com/kayawari/graphql-todo/services/auth/internal/handler"
+	"github.com/kayawari/graphql-todo/services/auth/internal/issuer"
 )
 
 func main() {

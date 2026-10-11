@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/kayawari/jikken/graphql-todo/services/user/internal/auth"
-	"github.com/kayawari/jikken/graphql-todo/services/user/internal/db"
+	"github.com/kayawari/graphql-todo/services/user/internal/auth"
+	"github.com/kayawari/graphql-todo/services/user/internal/db"
 )
 
 // DefaultDisplayName は JWT の display_name claim が空のときの初期値。

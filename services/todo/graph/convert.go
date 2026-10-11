@@ -5,8 +5,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/kayawari/jikken/graphql-todo/services/todo/graph/model"
-	"github.com/kayawari/jikken/graphql-todo/services/todo/internal/db"
+	"github.com/kayawari/graphql-todo/services/todo/graph/model"
+	"github.com/kayawari/graphql-todo/services/todo/internal/db"
 )
 
 func toTodoModel(t db.Todo) *model.Todo {

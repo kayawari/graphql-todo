@@ -3,7 +3,7 @@ package graph
 import (
 	"log/slog"
 
-	"github.com/kayawari/jikken/graphql-todo/services/todo/internal/service"
+	"github.com/kayawari/graphql-todo/services/todo/internal/service"
 )
 
 // This file will not be regenerated automatically.

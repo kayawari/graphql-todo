@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/kayawari/jikken/graphql-todo/services/todo/internal/db"
+	"github.com/kayawari/graphql-todo/services/todo/internal/db"
 )
 
 var ErrNotFound = errors.New("todo not found")

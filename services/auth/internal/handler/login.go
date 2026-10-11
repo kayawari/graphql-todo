@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/kayawari/jikken/graphql-todo/services/auth/internal/password"
+	"github.com/kayawari/graphql-todo/services/auth/internal/password"
 )
 
 // login は「メールアドレスが存在しない」と「パスワードが違う」を区別しない

@@ -12,12 +12,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/kayawari/jikken/graphql-todo/services/todo/graph/generated"
-	"github.com/kayawari/jikken/graphql-todo/services/todo/graph/model"
-	"github.com/kayawari/jikken/graphql-todo/services/todo/internal/apperr"
-	"github.com/kayawari/jikken/graphql-todo/services/todo/internal/auth"
-	"github.com/kayawari/jikken/graphql-todo/services/todo/internal/db"
-	"github.com/kayawari/jikken/graphql-todo/services/todo/internal/service"
+	"github.com/kayawari/graphql-todo/services/todo/graph/generated"
+	"github.com/kayawari/graphql-todo/services/todo/graph/model"
+	"github.com/kayawari/graphql-todo/services/todo/internal/apperr"
+	"github.com/kayawari/graphql-todo/services/todo/internal/auth"
+	"github.com/kayawari/graphql-todo/services/todo/internal/db"
+	"github.com/kayawari/graphql-todo/services/todo/internal/service"
 )
 
 // CreateTodo is the resolver for the createTodo field.

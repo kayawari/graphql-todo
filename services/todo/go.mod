@@ -1,4 +1,4 @@
-module github.com/kayawari/jikken/graphql-todo/services/todo
+module github.com/kayawari/graphql-todo/services/todo
 
 go 1.26.1
 

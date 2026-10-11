@@ -1,4 +1,4 @@
-module github.com/kayawari/jikken/graphql-todo/services/user
+module github.com/kayawari/graphql-todo/services/user
 
 go 1.26.1
 
