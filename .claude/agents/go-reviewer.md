@@ -17,7 +17,8 @@ tools: Read, Grep, Glob, Bash
 
 1. **対象の特定**
    - 指示でファイルやディレクトリが指定されていればそれを対象にする。
-   - 指定が無ければ `git diff --name-only HEAD` と `git ls-files --others --exclude-standard` から `services/**/*.go` を抽出する。
+   - 指定が無ければ、ブランチでコミット済みの変更（`git diff --name-only main...HEAD`）、未コミットの変更（`git diff --name-only HEAD`）、
+     未追跡ファイル（`git ls-files --others --exclude-standard`）を合わせ、そこから `services/**/*.go` を抽出する。
    - 生成物（`graph/generated/`、`graph/model/models_gen.go`、`internal/db/*.sql.go`）はレビュー対象外。
      ただし生成物が手で編集された形跡があれば指摘する。
 2. **機械検査**（対象を含むサービスのディレクトリ `services/<svc>` で実行。各サービスは独立した Go モジュール）
