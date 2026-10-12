@@ -1154,7 +1154,7 @@ graphql-todo/
 | `router-compose` | `node:22-alpine` | - | one-shot。`npx wgc router compose -i /work/graph.yaml -o /work/router.json` |
 | `router` | `ghcr.io/wundergraph/cosmo/router` | 3002, 8088 | Federation Router + Prometheus |
 | **`web`** | ローカルビルド | **8084** | Web フロントエンド（BFF）+ `/health` |
-| `envoy` | `envoyproxy/envoy:v1.31-latest` | 8080, 9901 | **profile: `proxy`** |
+| `envoy` | `envoyproxy/envoy:v1.39-latest` | 8080, 9901 | **profile: `proxy`** |
 
 ### 8.2 起動順序
 
@@ -1236,9 +1236,22 @@ Schema Registry を使う `wgc router fetch` に切り替えるのが公式の�
 | `/auth/login`, `/auth/signup` | auth サービス | **IP あたり 5 req/min のレート制限**（ブルートフォース対策） |
 | `/.well-known/jwks.json` | auth サービス | レート制限なし |
 | `/graphql` | Cosmo Router | — |
-| `POST /login`, `POST /signup` | web | auth と同じ 5 req/min のレート制限（§4.7） |
+| `POST /login`, `POST /signup` | web | auth と同じく IP あたり 5 req/min のレート制限（§4.7） |
 | `/`（上記以外） | web | — |
 | （共通） | — | **401 レスポンスボディの正規化**（§6.8-#9）、アクセスログ、admin(:9901) |
+
+レート制限は `local_ratelimit` の**値を省いた記述子**（`remote_address`）で、送信元 IP ごとに
+別のトークンバケットを持たせている。記述子を使わない素の `token_bucket` は Envoy 1 台で
+1 つのバケットを全クライアントが共有するため、誰か 1 人が 5 回失敗するだけで、その 1 分間は
+全員がログインできなくなる（ブルートフォース対策のつもりが、サイト全体のロックアウトになる）。
+
+- この記述子（`max_dynamic_descriptors`）は Envoy 1.34 以降の機能。そのためイメージを v1.39 に上げた
+- `use_remote_address: true` にして、接続元のアドレスをクライアントの IP とみなす。
+  `X-Forwarded-For` を信じると、ヘッダを毎回変えるだけで制限をすり抜けられる
+- IP ごとのバケットは LRU で最大 10000 件保持する。あふれて追い出されたバケットは満杯から
+  やり直しになるだけなので、制限が厳しくなる方向には働かない
+- Docker Desktop の開発環境では、ホストからのリクエストがすべて同じ IP（ゲートウェイ）に見える。
+  ホストのブラウザと curl は同じバケットを使う
 
 ログインのレート制限は、認証がグラフ内にあった頃は実質不可能だった
 （Router から見れば `POST /graphql` の一種でしかなく、パス単位で絞れない）。

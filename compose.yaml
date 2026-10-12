@@ -182,7 +182,7 @@ services:
 
   # ---- エッジ（オプトイン）----
   envoy:
-    image: envoyproxy/envoy:v1.31-latest
+    image: envoyproxy/envoy:v1.39-latest
     profiles: ["proxy"]
     depends_on:
       - router

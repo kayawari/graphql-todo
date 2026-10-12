@@ -21,6 +21,10 @@ static_resources:
               typed_config:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 stat_prefix: edge
+                # エッジなので、接続元のアドレスをそのままクライアントの IP とみなす。
+                # false だと X-Forwarded-For の値を信じるため、ヘッダを毎回変えるだけで
+                # IP 単位のレート制限をすり抜けられる。
+                use_remote_address: true
                 access_log:
                   - name: envoy.access_loggers.stdout
                     typed_config:
@@ -49,29 +53,61 @@ static_resources:
                       routes:
                         # ログイン / サインアップ: レート制限あり
                         - match: { path: "/auth/login" }
-                          route: { cluster: auth }
+                          route:
+                            cluster: auth
+                            # 送信元 IP ごとの記述子を作り、下の descriptors と突き合わせる
+                            rate_limits:
+                              - actions: [{ remote_address: {} }]
                           typed_per_filter_config:
                             envoy.filters.http.local_ratelimit:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
                               stat_prefix: auth_login
+                              # 記述子に一致しなかった場合だけ使う、全クライアント共有の上限。
+                              # 通常は remote_address の記述子が必ず一致するので使われない。
                               token_bucket:
-                                max_tokens: 5
-                                tokens_per_fill: 5
+                                max_tokens: 1000
+                                tokens_per_fill: 1000
                                 fill_interval: 60s
+                              always_consume_default_token_bucket: false
+                              # value を省いた記述子は「値ごとに別のバケット」になる。
+                              # これで IP ごとに 5 req/min になる（全員で 1 つのバケットを共有しない）。
+                              descriptors:
+                                - entries: [{ key: remote_address }]
+                                  token_bucket:
+                                    max_tokens: 5
+                                    tokens_per_fill: 5
+                                    fill_interval: 60s
+                              max_dynamic_descriptors: 10000
                               filter_enabled:
                                 default_value: { numerator: 100, denominator: HUNDRED }
                               filter_enforced:
                                 default_value: { numerator: 100, denominator: HUNDRED }
                         - match: { path: "/auth/signup" }
-                          route: { cluster: auth }
+                          route:
+                            cluster: auth
+                            # 送信元 IP ごとの記述子を作り、下の descriptors と突き合わせる
+                            rate_limits:
+                              - actions: [{ remote_address: {} }]
                           typed_per_filter_config:
                             envoy.filters.http.local_ratelimit:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
                               stat_prefix: auth_signup
+                              # 記述子に一致しなかった場合だけ使う、全クライアント共有の上限。
+                              # 通常は remote_address の記述子が必ず一致するので使われない。
                               token_bucket:
-                                max_tokens: 5
-                                tokens_per_fill: 5
+                                max_tokens: 1000
+                                tokens_per_fill: 1000
                                 fill_interval: 60s
+                              always_consume_default_token_bucket: false
+                              # value を省いた記述子は「値ごとに別のバケット」になる。
+                              # これで IP ごとに 5 req/min になる（全員で 1 つのバケットを共有しない）。
+                              descriptors:
+                                - entries: [{ key: remote_address }]
+                                  token_bucket:
+                                    max_tokens: 5
+                                    tokens_per_fill: 5
+                                    fill_interval: 60s
+                              max_dynamic_descriptors: 10000
                               filter_enabled:
                                 default_value: { numerator: 100, denominator: HUNDRED }
                               filter_enforced:
@@ -88,29 +124,61 @@ static_resources:
                         # Web フロントエンド。web は auth を内部ネットワークで直接呼ぶため、
                         # /auth/login のレート制限が効かない。画面側の POST にも同じ制限をかける。
                         - match: { path: "/login", headers: [{ name: ":method", string_match: { exact: "POST" } }] }
-                          route: { cluster: web }
+                          route:
+                            cluster: web
+                            # 送信元 IP ごとの記述子を作り、下の descriptors と突き合わせる
+                            rate_limits:
+                              - actions: [{ remote_address: {} }]
                           typed_per_filter_config:
                             envoy.filters.http.local_ratelimit:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
                               stat_prefix: web_login
+                              # 記述子に一致しなかった場合だけ使う、全クライアント共有の上限。
+                              # 通常は remote_address の記述子が必ず一致するので使われない。
                               token_bucket:
-                                max_tokens: 5
-                                tokens_per_fill: 5
+                                max_tokens: 1000
+                                tokens_per_fill: 1000
                                 fill_interval: 60s
+                              always_consume_default_token_bucket: false
+                              # value を省いた記述子は「値ごとに別のバケット」になる。
+                              # これで IP ごとに 5 req/min になる（全員で 1 つのバケットを共有しない）。
+                              descriptors:
+                                - entries: [{ key: remote_address }]
+                                  token_bucket:
+                                    max_tokens: 5
+                                    tokens_per_fill: 5
+                                    fill_interval: 60s
+                              max_dynamic_descriptors: 10000
                               filter_enabled:
                                 default_value: { numerator: 100, denominator: HUNDRED }
                               filter_enforced:
                                 default_value: { numerator: 100, denominator: HUNDRED }
                         - match: { path: "/signup", headers: [{ name: ":method", string_match: { exact: "POST" } }] }
-                          route: { cluster: web }
+                          route:
+                            cluster: web
+                            # 送信元 IP ごとの記述子を作り、下の descriptors と突き合わせる
+                            rate_limits:
+                              - actions: [{ remote_address: {} }]
                           typed_per_filter_config:
                             envoy.filters.http.local_ratelimit:
                               "@type": type.googleapis.com/envoy.extensions.filters.http.local_ratelimit.v3.LocalRateLimit
                               stat_prefix: web_signup
+                              # 記述子に一致しなかった場合だけ使う、全クライアント共有の上限。
+                              # 通常は remote_address の記述子が必ず一致するので使われない。
                               token_bucket:
-                                max_tokens: 5
-                                tokens_per_fill: 5
+                                max_tokens: 1000
+                                tokens_per_fill: 1000
                                 fill_interval: 60s
+                              always_consume_default_token_bucket: false
+                              # value を省いた記述子は「値ごとに別のバケット」になる。
+                              # これで IP ごとに 5 req/min になる（全員で 1 つのバケットを共有しない）。
+                              descriptors:
+                                - entries: [{ key: remote_address }]
+                                  token_bucket:
+                                    max_tokens: 5
+                                    tokens_per_fill: 5
+                                    fill_interval: 60s
+                              max_dynamic_descriptors: 10000
                               filter_enabled:
                                 default_value: { numerator: 100, denominator: HUNDRED }
                               filter_enforced:
