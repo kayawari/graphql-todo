@@ -3,7 +3,6 @@ package handler
 import (
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/kayawari/graphql-todo/services/web/internal/backend"
@@ -119,23 +118,14 @@ func (h *Handler) listPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// todoInput はフォームを GraphQL の入力に変換する。user_id は扱わない（design.md §6.7-4）。
-func todoInput(r *http.Request) map[string]any {
-	in := map[string]any{"title": strings.TrimSpace(r.FormValue("title"))}
-	if d := strings.TrimSpace(r.FormValue("description")); d != "" {
-		in["description"] = d
-	}
-	if d := r.FormValue("dueDate"); d != "" {
-		if t, err := time.Parse(time.DateOnly, d); err == nil {
-			in["dueDate"] = t.Format(time.RFC3339)
-		}
-	}
-	return in
-}
-
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
+	f, err := parseTodoForm(r)
+	if err != nil {
+		h.badRequest(w, err.Error())
+		return
+	}
 	const q = `mutation($input: CreateTodoInput!) { createTodo(input: $input) { id } }`
-	err := h.gql.Do(r.Context(), tokenFrom(r.Context()), q, map[string]any{"input": todoInput(r)}, nil)
+	err = h.gql.Do(r.Context(), tokenFrom(r.Context()), q, map[string]any{"input": f.createInput()}, nil)
 	if h.inputError(w, err) {
 		return
 	}
@@ -170,12 +160,14 @@ func (h *Handler) editForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
-	in := todoInput(r)
-	// 編集画面でメモを空にしたら空文字で上書きする（未指定＝既存値維持とは区別する）。
-	in["description"] = strings.TrimSpace(r.FormValue("description"))
+	f, err := parseTodoForm(r)
+	if err != nil {
+		h.badRequest(w, err.Error())
+		return
+	}
 	h.mutate(w, r, "update",
 		`mutation($id: ID!, $input: UpdateTodoInput!) { updateTodo(id: $id, input: $input) { id } }`,
-		map[string]any{"id": r.PathValue("id"), "input": in})
+		map[string]any{"id": r.PathValue("id"), "input": f.updateInput()})
 }
 
 func (h *Handler) done(w http.ResponseWriter, r *http.Request) {
@@ -208,6 +200,10 @@ func (h *Handler) inputError(w http.ResponseWriter, err error) bool {
 	if !errors.As(err, &ie) {
 		return false
 	}
-	h.render(w, http.StatusBadRequest, "error", page{Title: "入力エラー", Error: ie.Msg})
+	h.badRequest(w, ie.Msg)
 	return true
+}
+
+func (h *Handler) badRequest(w http.ResponseWriter, msg string) {
+	h.render(w, http.StatusBadRequest, "error", page{Title: "入力エラー", Error: msg})
 }

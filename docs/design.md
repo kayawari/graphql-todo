@@ -367,6 +367,10 @@ Go 標準の `html/template` でサーバー描画する BFF。auth と同じく
 
 HTML フォームは GET と POST しか送れないため、更新系はすべて POST にしている。
 
+フォームの値は `parseTodoForm` で検証済みの struct（`todoForm`）に変換してから、GraphQL の入力型と
+同じ形の struct（`createTodoInput` / `updateTodoInput`）にして送る。期限は `Date` 型で
+`YYYY-MM-DD` だけを受け付け、`2026/10/12` や存在しない日付は黙って捨てずに 400 の入力エラーにする。
+
 **認可はバックエンドに任せる。** web はユーザー ID を扱わない（URL にもフォームにも出さない）。
 他人の TODO の ID を URL に入れると、Router が `NOT_FOUND` を返すので、そのまま 404 画面にする。
 web 側で「自分の TODO か」を判定する処理は追加しない。判定する箇所をバックエンドだけにしておくため。
