@@ -355,6 +355,102 @@ todoConnection(filter: TodoFilter, first: Int = 20, after: String): TodoConnecti
 Go 標準の `html/template` でサーバー描画する BFF。auth と同じく GraphQL グラフには
 参加せず、auth の REST と Router の GraphQL をサーバー側から呼ぶ。
 
+#### なぜブラウザから `/graphql` を呼ばないのか（BFF にした理由）
+
+`/graphql` を隠しているわけではない。curl などの API クライアントは、今も
+`:3002/graphql`（Envoy 経由なら `:8080/graphql`）を直接使える。web フロントエンドが
+「ブラウザからは呼ばない」作りにしているだけである。
+
+```mermaid
+flowchart LR
+    subgraph Browser["ブラウザ"]
+        Page["HTML（完成品）<br/>+ scroll.js"]
+        Cookie[("Cookie: session<br/>HttpOnly / SameSite=Strict<br/>JS から読めない")]
+    end
+
+    APIClient["API クライアント<br/>（curl・将来のモバイルアプリ）"]
+
+    subgraph Server["サーバー側（compose ネットワーク）"]
+        Web["<b>web :8084</b>（BFF）<br/>html/template で HTML を組み立てる<br/>Cookie → Authorization に付け替え<br/>CSRF・no-store・リダイレクト"]
+        Auth["auth :8083<br/>REST・グラフ外"]
+        Router["Cosmo Router :3002<br/>require_authentication: true<br/>Authorization ヘッダだけで認証"]
+        UserSG["user サブグラフ"]
+        TodoSG["todo サブグラフ"]
+    end
+
+    Page <-->|"GET / ・ POST /todos …（Cookie が自動で付く）<br/>⇄ HTML / HTML 断片"| Web
+    Web -->|"POST /auth/login・signup"| Auth
+    Web -->|"POST /graphql<br/>Authorization: Bearer"| Router
+    APIClient -->|"POST /graphql<br/>Authorization: Bearer"| Router
+    APIClient -->|"POST /auth/login"| Auth
+    Router --> UserSG
+    Router --> TodoSG
+    Page -. "呼ばない" .-x Router
+```
+
+一覧を開いたときの流れ:
+
+```mermaid
+sequenceDiagram
+    participant B as ブラウザ
+    participant W as web（BFF）
+    participant R as Router
+    B->>W: GET /（Cookie: session=<token>）
+    W->>R: POST /graphql（Authorization: Bearer <token>）<br/>me + todoConnection
+    R-->>W: JSON（user / todo サブグラフの結果をまとめたもの）
+    W->>W: html/template で HTML を組み立てる
+    W-->>B: 完成した HTML
+```
+
+**ブラウザから直接呼ばない理由**
+
+1. **トークンを JS から読めない場所に置くため（最も重要な理由）。**
+   ブラウザから `/graphql` を呼ぶには、リクエストに `Authorization: Bearer <token>` を付ける必要がある。
+   つまり JS がトークンを読める場所（`localStorage` など）に置くことになる。
+
+   | 方式 | トークンの置き場所 | XSS が起きたとき |
+   | --- | --- | --- |
+   | ブラウザから `/graphql` を呼ぶ | `localStorage` など（JS から読める） | スクリプトにトークンを盗まれ、攻撃者が自分の環境から `exp` まで使える |
+   | **web サーバー経由（採用）** | **`HttpOnly` Cookie（JS から読めない）** | **トークン自体は盗まれない** |
+
+   現状は発行済みトークンを失効させる手段が無い（§6.1）。盗まれると 15 分間は止められないため、
+   「そもそも JS に触らせない」ことの価値が大きい。
+
+2. **Router に Cookie を読ませないため。**
+   「Router が Cookie を直接読む」形にすれば、ブラウザから呼んでもトークンを JS に渡さずに済む。
+   しかしそうすると、Router（と手前の Envoy）に CSRF 対策や CORS の設定が必要になる。
+   Router は「`Authorization` ヘッダで認証する API」のまま単純に保ち、
+   `require_authentication: true` による「トークンが無ければ全部 401」という性質（§6.5）を崩さない。
+
+3. **サーバー描画の方式と一致するため。**
+   `html/template` は、サーバーがデータを埋め込んだ完成済みの HTML をブラウザに返す仕組みである。
+   HTML を組み立てる時点でデータが要るので、取得もサーバー側で行うのが自然である。
+   ブラウザから `/graphql` を呼ぶと、JS で画面を組み立てる SPA の作りになり、`html/template` を使う意味が薄れる。
+   Infinite スクロールでも JSON ではなく HTML 断片を返すため、最初のページと続きのページで
+   同じテンプレート（`items.html`）を使え、JS に「JSON から画面を作る」コードが要らない。
+
+**BFF（画面用のサーバーを API の手前に置く）ことの利点**
+
+- **役割を分けられる。** Router とサブグラフは認証・認可・データだけに集中する。
+  Cookie、リダイレクト、CSRF、`no-store`、エラー画面といったブラウザ特有の事情は web に閉じる。
+- **API が画面の都合で変わらない。** curl や将来のモバイルアプリなど、ほかのクライアントも
+  同じ API をそのまま使える。画面のための例外を Router に足さずに済む。
+- **認可の判定箇所が増えない。** web はユーザー ID を扱わず、認可の判断は常にバックエンドで行う（§6.7）。
+  画面側に「自分の TODO か」の判定が紛れ込む余地が無い。
+- **トークンの扱いを 1 か所にまとめられる。** リフレッシュトークン（§12-1）を入れたとき、
+  期限切れの検知と再取得を web の中だけで実装できる。ブラウザ側の JS に失効や再取得のロジックを持たせずに済む。
+
+**デメリット（受け入れていること）**
+
+- 経由が 1 段増える（ブラウザ → web → Router）ぶん、応答がわずかに遅くなる。
+- web が止まると画面は使えない（API は動き続ける）。
+- 運用するサービスが 1 つ増える（デプロイ・監視・スケールの対象になる）。
+- ブラウザ側の GraphQL クライアントの機能（キャッシュ、画面の部分更新など）は使えない。
+  今回の「ほぼ CSS なし・シンプルな画面」という方針では不要と判断した。
+- 画面とクエリの両方を web が持つため、画面の変更でも web の再デプロイが要る。
+
+#### ルートと実装
+
 | メソッド | パス | 内容 |
 | --- | --- | --- |
 | GET / POST | `/login`, `/signup` | フォーム表示 / auth を呼び、成功したら Cookie を設定して `/` へ |
