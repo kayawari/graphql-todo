@@ -25,9 +25,11 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("COOKIE_SECURE: %w", err)
 	}
+	// 上限はここでは持たない。todoConnection の first の範囲は todo サブグラフが
+	// 決めて検証する（design.md §4.6）。web で同じ値を重複して持つと食い違うため。
 	size, err := strconv.Atoi(env("PAGE_SIZE", "20"))
-	if err != nil || size < 1 || size > 100 {
-		return nil, fmt.Errorf("PAGE_SIZE must be between 1 and 100")
+	if err != nil || size < 1 {
+		return nil, fmt.Errorf("PAGE_SIZE must be a positive integer")
 	}
 
 	return &Config{
