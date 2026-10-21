@@ -62,5 +62,13 @@ func (h *Handler) signup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.respondWithToken(w, http.StatusCreated, cred.ID, cred.Email, req.DisplayName)
+	// credentials の INSERT とは同じトランザクションにしない。ここで失敗しても
+	// アカウントはできているので、利用者はログインし直せば済む。
+	rt, err := h.rt.Issue(r.Context(), cred.ID)
+	if err != nil {
+		h.internalError(w, "issue refresh token", err)
+		return
+	}
+
+	h.respondWithToken(w, http.StatusCreated, cred.ID, cred.Email, req.DisplayName, &rt)
 }

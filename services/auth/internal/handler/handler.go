@@ -11,25 +11,30 @@ import (
 	"net/http"
 	"net/mail"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/kayawari/graphql-todo/services/auth/internal/db"
 	"github.com/kayawari/graphql-todo/services/auth/internal/issuer"
+	"github.com/kayawari/graphql-todo/services/auth/internal/refresh"
 )
 
 type Handler struct {
 	q   *db.Queries
 	iss *issuer.Issuer
+	rt  *refresh.Store
 	log *slog.Logger
 }
 
-func New(q *db.Queries, iss *issuer.Issuer, log *slog.Logger) http.Handler {
-	h := &Handler{q: q, iss: iss, log: log}
+func New(q *db.Queries, iss *issuer.Issuer, rt *refresh.Store, log *slog.Logger) http.Handler {
+	h := &Handler{q: q, iss: iss, rt: rt, log: log}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /auth/signup", h.signup)
 	mux.HandleFunc("POST /auth/login", h.login)
+	mux.HandleFunc("POST /auth/refresh", h.refresh)
+	mux.HandleFunc("POST /auth/logout", h.logout)
 	mux.HandleFunc("GET /.well-known/jwks.json", h.jwks)
 	mux.HandleFunc("GET /health", h.health)
 	return mux
@@ -48,11 +53,19 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
+// refreshRequest は /auth/refresh と /auth/logout の共通の入力。
+type refreshRequest struct {
+	RefreshToken string `json:"refreshToken"`
+}
+
 type tokenResponse struct {
 	AccessToken string `json:"accessToken"`
 	TokenType   string `json:"tokenType"`
 	ExpiresIn   int    `json:"expiresIn"`
-	UserID      string `json:"userId"`
+	// 猶予内の再提示（design.md §6.9）ではリフレッシュトークンを差し替えないので、2 つとも省く。
+	RefreshToken     string `json:"refreshToken,omitempty"`
+	RefreshExpiresIn int    `json:"refreshExpiresIn,omitempty"`
+	UserID           string `json:"userId"`
 }
 
 type errorResponse struct {
@@ -66,6 +79,7 @@ const (
 	errInvalidRequest     = "invalid_request"
 	errInvalidCredentials = "invalid_credentials"
 	errEmailExists        = "email_already_exists"
+	errInvalidGrant       = "invalid_grant"
 	errInternal           = "internal_error"
 )
 
@@ -106,18 +120,25 @@ func validateDisplayName(name string) string {
 	return ""
 }
 
-func (h *Handler) respondWithToken(w http.ResponseWriter, status int, userID uuid.UUID, email, displayName string) {
+// respondWithToken はアクセストークンを発行して返す。rt が nil なら
+// リフレッシュトークンを含めない（猶予内の再提示）。
+func (h *Handler) respondWithToken(w http.ResponseWriter, status int, userID uuid.UUID, email, displayName string, rt *refresh.Issued) {
 	tok, err := h.iss.Issue(userID, email, displayName)
 	if err != nil {
 		h.internalError(w, "issue token", err)
 		return
 	}
-	writeJSON(w, status, tokenResponse{
+	res := tokenResponse{
 		AccessToken: tok,
 		TokenType:   "Bearer",
 		ExpiresIn:   int(h.iss.TTL().Seconds()),
 		UserID:      userID.String(),
-	})
+	}
+	if rt != nil {
+		res.RefreshToken = rt.Token
+		res.RefreshExpiresIn = int(time.Until(rt.ExpiresAt).Seconds())
+	}
+	writeJSON(w, status, res)
 }
 
 func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {

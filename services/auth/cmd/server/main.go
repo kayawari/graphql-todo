@@ -20,6 +20,7 @@ import (
 	"github.com/kayawari/graphql-todo/services/auth/internal/db"
 	"github.com/kayawari/graphql-todo/services/auth/internal/handler"
 	"github.com/kayawari/graphql-todo/services/auth/internal/issuer"
+	"github.com/kayawari/graphql-todo/services/auth/internal/refresh"
 )
 
 func main() {
@@ -57,9 +58,11 @@ func run(log *slog.Logger) error {
 	// kid をログに出しておくと、鍵ローテーションの前後を追える（design.md §6.2）。
 	log.Info("signing key loaded", "kid", iss.KeyID(), "ttl", cfg.AccessTokenTTL.String())
 
+	rt := refresh.New(pool, cfg.RefreshTokenTTL, cfg.RefreshTokenMaxAge, cfg.RefreshReuseGrace)
+
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           handler.New(db.New(pool), iss, log),
+		Handler:           handler.New(db.New(pool), iss, rt, log),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

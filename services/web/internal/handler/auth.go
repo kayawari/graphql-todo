@@ -10,7 +10,7 @@ import (
 )
 
 func (h *Handler) loginForm(w http.ResponseWriter, r *http.Request) {
-	if session.Get(r) != "" {
+	if session.Get(r) != "" || session.GetRefresh(r) != "" {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
@@ -36,7 +36,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	session.Set(w, tok.AccessToken, tok.ExpiresIn, h.cookieSecure)
+	h.saveTokens(w, tok)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -63,11 +63,19 @@ func (h *Handler) signup(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	session.Set(w, tok.AccessToken, tok.ExpiresIn, h.cookieSecure)
+	h.saveTokens(w, tok)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// logout はリフレッシュトークンを auth 側で失効させてから Cookie を消す。
+// アクセストークンは最大 15 分で自然に切れる（design.md §6.1）。
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
+	if rt := session.GetRefresh(r); rt != "" {
+		// 失効に失敗しても、利用者から見たログアウトは止めない。
+		if err := h.auth.Logout(r.Context(), rt); err != nil {
+			h.log.Warn("revoke refresh token", "err", err)
+		}
+	}
 	session.Clear(w, h.cookieSecure)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }

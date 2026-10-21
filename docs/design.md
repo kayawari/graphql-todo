@@ -16,7 +16,7 @@
 ### やること
 
 - TODO の CRUD（作成・一覧・取得・更新・削除）
-- ユーザー登録 / ログイン（JWT 発行）
+- ユーザー登録 / ログイン（JWT 発行）/ リフレッシュトークンとログアウト（§6.9）
 - 自分が作成した TODO 以外は一切見えない認可
 - docker compose 一発で立ち上がる開発環境
 - `html/template` でサーバー描画する最小限の Web フロントエンド（§4.7）
@@ -27,8 +27,6 @@
 - 本番環境の IaC・CI/CD・監視の実装（構成候補の比較まで）
 - GraphQL Subscription（リアルタイム更新）
 - パスワードリセット / メール確認
-- リフレッシュトークン（§6.1, §12-1）。当初は「FE 着手前に必ず実装する」としていたが、
-  Web フロントエンド（§4.7）を先に作ることにした。それまでは 15 分ごとの再ログインを許容する
 
 ---
 
@@ -134,6 +132,8 @@ UUID を **auth サービスが採番**し、以降すべてのサービスが�
 | --- | --- | --- | --- |
 | POST | `/auth/signup` | 不要 | アカウント作成 + トークン発行 |
 | POST | `/auth/login` | 不要 | トークン発行 |
+| POST | `/auth/refresh` | リフレッシュトークン | アクセストークンの出し直し + リフレッシュトークンのローテーション（§6.9） |
+| POST | `/auth/logout` | リフレッシュトークン | リフレッシュトークンのファミリーを失効（§6.9）。常に `204` |
 | GET | `/.well-known/jwks.json` | 不要 | 公開鍵の配信（Router・サブグラフが参照） |
 | GET | `/health` | 不要 | ヘルスチェック |
 
@@ -152,11 +152,24 @@ Content-Type: application/json
   "accessToken": "eyJhbGciOiJSUzI1NiIsImtpZCI6...",
   "tokenType": "Bearer",
   "expiresIn": 900,
+  "refreshToken": "q3Xr...（32 バイトの乱数を base64url）",
+  "refreshExpiresIn": 1209600,
   "userId": "9f1c...-....-....-....-............"
 }
 ```
 
 `/auth/login` はリクエストから `displayName` が無いだけで、レスポンス形は同じ。
+
+```http
+POST /auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "q3Xr..." }
+```
+
+成功時は `200` で、レスポンス形は上と同じ（`refreshToken` は新しい値）。
+並行リクエストの猶予内（§6.9）では `refreshToken` / `refreshExpiresIn` を省き、アクセストークンだけを返す。
+`/auth/logout` もボディは同じで、`204 No Content` を返す。
 
 REST にしたことで、HTTP ステータスコードが本来の意味で使えるようになる
 （GraphQL では全て 200 + `errors` になる）。エラー設計は §9.1。
@@ -358,7 +371,7 @@ Go 標準の `html/template` でサーバー描画する BFF。auth と同じく
 | メソッド | パス | 内容 |
 | --- | --- | --- |
 | GET / POST | `/login`, `/signup` | フォーム表示 / auth を呼び、成功したら Cookie を設定して `/` へ |
-| POST | `/logout` | Cookie を削除して `/login` へ |
+| POST | `/logout` | auth の `/auth/logout` でリフレッシュトークンを失効させ、Cookie を削除して `/login` へ |
 | GET | `/` | 未完了（`status: TODO`）の一覧と追加フォーム。DONE は表示しない |
 | GET | `/todos/page?after=` | 一覧の続き。HTML 断片だけを返す（Infinite スクロール用） |
 | POST | `/todos` | 作成 |
@@ -371,23 +384,27 @@ HTML フォームは GET と POST しか送れないため、更新系はすべ�
 他人の TODO の ID を URL に入れると、Router が `NOT_FOUND` を返すので、そのまま 404 画面にする。
 web 側で「自分の TODO か」を判定する処理は追加しない。判定する箇所をバックエンドだけにしておくため。
 
-**セッション。** auth が発行したアクセストークンを、そのまま Cookie に入れる。
+**セッション。** auth が発行したアクセストークン（Cookie `session`）とリフレッシュトークン（Cookie `refresh`）を、そのまま Cookie に入れる。属性はどちらも同じ。
 
 | 属性 | 値 | 理由 |
 | --- | --- | --- |
 | `HttpOnly` | true | ブラウザの JS からトークンを読めないようにする（XSS 対策） |
 | `SameSite` | `Strict` | 他サイトからのリクエストに Cookie を付けない（CSRF 対策の一層目） |
 | `Secure` | `COOKIE_SECURE`（開発は false） | 本番の HTTPS では true にする |
-| `Max-Age` | トークンの `expiresIn` | 期限切れのトークンをブラウザに残さない |
+| `Max-Age` | `session` は `expiresIn`、`refresh` は `refreshExpiresIn` | 期限切れのトークンをブラウザに残さない |
 
 - CSRF 対策の二層目として、POST では `Origin`（無ければ `Referer`）が自分自身のホストかを確かめる。
   どちらも無い POST は拒否する。
 - ログインが必要なページはすべて `Cache-Control: no-store` にする。ログアウト後にブラウザの
   「戻る」で、キャッシュされた一覧が見えてしまうのを防ぐため。
-- web はトークンを自分では検証しない。Router が 401 を返したら（期限切れ・鍵の差し替え）、
-  Cookie を消して `/login` へ戻す。
-- ログアウトは Cookie を消すだけ。トークン自体は `exp` まで有効なまま残る。
-  失効させる手段はリフレッシュトークン（§12-1）を入れるまで無い（§6.1）。
+- web はトークンを自分では検証しない。
+- `session` の Cookie が切れていて `refresh` があれば、`requireSession` が `/auth/refresh` で出し直してから処理を続ける。
+  Cookie の `Max-Age` はトークンの `exp` に揃えてあるので、通常の期限切れはこの経路になる。
+- Router が 401 を返したら、理由を問わず一度だけリフレッシュしてクエリを投げ直す。
+  Router の 401 はサブグラフに届く前の拒否なので、mutation を投げ直しても二重実行にならない。
+- リフレッシュも失敗したら（期限切れ・失効・再利用の検知）、両方の Cookie を消して `/login` へ戻す。
+- ログアウトでは、auth でリフレッシュトークンのファミリーを失効させてから Cookie を消す。
+  アクセストークンは最大 15 分で自然に切れる（§6.9）。
 
 **Infinite スクロール。** 一覧の末尾に「次へ」リンク（`/?after=<endCursor>`）を置く。
 `static/scroll.js`（外部依存なし）が `IntersectionObserver` でこのリンクを監視し、
@@ -429,11 +446,22 @@ erDiagram
         timestamptz created_at
         timestamptz updated_at
     }
+    REFRESH_TOKENS {
+        uuid id PK
+        uuid family_id "ログイン 1 回ごとに採番"
+        uuid user_id FK "credentials.id（同一 DB なので FK あり）"
+        bytea token_hash UK "SHA-256。値そのものは保存しない"
+        timestamptz expires_at
+        timestamptz family_expires_at
+        timestamptz used_at "ローテーション済みの印"
+        timestamptz created_at
+    }
+    CREDENTIALS ||--o{ REFRESH_TOKENS : "FK（ON DELETE CASCADE）"
     CREDENTIALS ||..|| USERS : "同一 ID（JIT provisioning で生成）"
     USERS ||..o{ TODOS : "論理的な参照（DB制約では表現しない）"
 ```
 
-3 つの DB をまたぐ関連は、いずれも **DB 制約では表現しない**。
+3 つの DB をまたぐ関連は、いずれも **DB 制約では表現しない**（同じ DB 内の `refresh_tokens` → `credentials` だけは FK を張る）。
 同じ UUID を共有するという規約だけで結び付ける。
 
 ### 5.1 auth_db
@@ -456,6 +484,21 @@ CREATE TABLE credentials (
 
 `display_name` はここに持たない。auth が知る必要があるのは「サインアップ時に
 受け取って JWT claim に載せる」までで、保存はしない（真実源は user_db）。
+
+```sql
+CREATE TABLE refresh_tokens (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    family_id         UUID        NOT NULL,
+    user_id           UUID        NOT NULL REFERENCES credentials (id) ON DELETE CASCADE,
+    token_hash        BYTEA       NOT NULL UNIQUE,
+    expires_at        TIMESTAMPTZ NOT NULL,
+    family_expires_at TIMESTAMPTZ NOT NULL,
+    used_at           TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+リフレッシュトークン（§6.9）。値そのものではなく SHA-256 ハッシュだけを持つ。
 
 ### 5.2 user_db
 
@@ -569,6 +612,10 @@ RS256 なら秘密鍵は auth サービスだけが持ち、Router もサブグ�
 
 初版では 1 時間としていたが、再検討して **15 分に短縮**する。
 
+> 注: 以下は導入当時の議論。その後リフレッシュトークン（§6.9）を入れたため、
+> 現在はログアウトとリフレッシュトークンの失効が可能になっている。
+> アクセストークン自体は今もステートレスで、失効させず最大 15 分で切れるのを待つ。
+
 **前提: 今の構成には失効手段が存在しない。**
 RS256 のステートレス JWT は、発行後にサーバー側から無効化できない。
 リフレッシュトークンもブロックリストもスコープ外である以上（§12-1, §12-2）、
@@ -596,7 +643,7 @@ FE クライアントはスコープ外（§1）なので、UX 上の損失が�
 ローテーション手順（§6.2）の待機時間はアクセストークン TTL に等しい。
 1 時間 → 15 分にすることで、ローテーション完了までが約 65 分から約 20 分になる。
 
-**次のステップ（§12-1 に反映）**: リフレッシュトークンを `auth_db` の
+**次のステップ（§6.9 で実装済み）**: リフレッシュトークンを `auth_db` の
 `refresh_tokens` テーブルに保存する方式にすれば、**Redis を導入せずに失効機構が手に入る**。
 ログアウト＝該当行の DELETE で、アクセストークンは最大 15 分で自然に切れる。
 「キャッシュサーバー不要」という前提（§1）と衝突しない。
@@ -698,7 +745,10 @@ flowchart LR
 
 **緊急時（秘密鍵の漏洩）**は ⑤ の待機を飛ばし、⑥ を即座に実行する。
 発行済みトークンが全て無効になり全ユーザーが再ログインを強いられるが、
-**これが現構成で唯一の「全体失効」手段**である（§6.1 / §12-2）。
+**これが現構成で唯一の「アクセストークンの全体失効」手段**である（§6.1）。
+リフレッシュトークン（§6.9）は署名鍵に依存しない不透明な値なので、鍵を替えても失効しない。
+利用者は再ログインせずに、新しい鍵で署名されたアクセストークンを受け取れる。
+リフレッシュトークンまで全失効させたいときは `refresh_tokens` を全行削除する。
 
 #### 障害時の挙動
 
@@ -767,6 +817,13 @@ sequenceDiagram
     T->>T: SELECT ... WHERE user_id = $viewer
     T-->>R: [Todo]
     R-->>C: 統合レスポンス
+
+    Note over C,A: ④ アクセストークンの出し直し（§6.9）
+    C->>E: POST /auth/refresh {refreshToken}
+    E->>A: 転送
+    A->>A: ハッシュで行を引く（FOR UPDATE）
+    A->>A: used_at を付け、同じファミリーで新しい行を INSERT
+    A-->>C: 200 {accessToken, refreshToken(新), ...}
 ```
 
 ### 6.4 JIT provisioning
@@ -995,6 +1052,11 @@ func ViewerFromContext(ctx context.Context) (*Viewer, error)
 | 10 | `me` | サインアップ直後、`user_db` に行が無い | JIT provisioning で行が作られ、正常に `User` が返る |
 | 11 | `_entities(User{id: 他人})` | `user_db` に他人の行が存在しない | provisioning せず `null` を返す（任意の UUID で行を作らせない） |
 | 12 | `createTodo` | サブグラフのポートへ直接アクセス + `X-User-ID` 詐称（Authorization ヘッダなし） | 未確定（要検証 → [todo.md](../todo.md) #1） |
+| 13 | `POST /auth/refresh` | 未使用・期限内のリフレッシュトークン | `200`。新しいアクセストークンと新しいリフレッシュトークン。旧トークンは使用済みになる |
+| 14 | `POST /auth/refresh` | 不明・期限切れのリフレッシュトークン | `401 invalid_grant`。理由を区別しない |
+| 15 | `POST /auth/refresh` | 使用済みのトークンを、使用から 10 秒を過ぎて再提示 | `401 invalid_grant` + **そのファミリーを全行削除**（以後、正規側の新しいトークンも使えない）。他のファミリーは影響を受けない。サーバーログに warn |
+| 16 | `POST /auth/refresh` | 使用済みのトークンを、使用から 10 秒以内に再提示（並行リクエスト） | `200`。アクセストークンだけを返し、`refreshToken` は省く。失効もローテーションもしない |
+| 17 | `POST /auth/logout` 後の `POST /auth/refresh` | ログアウトしたリフレッシュトークン | `401 invalid_grant`。`/auth/logout` 自体はトークンの有効・無効にかかわらず `204` |
 
 #### 補足: 各判断の根拠
 
@@ -1008,9 +1070,11 @@ func ViewerFromContext(ctx context.Context) (*Viewer, error)
   Envoy の `local_reply_config` でレスポンスボディを差し替えるか、
   Router の custom module でエラーを正規化する（§8.5）。
 - 詳細な理由はサーバーログにのみ `slog` で残し、運用側では追えるようにする。
-- トレードオフ: クライアントが「期限切れなら自動リフレッシュ」という導線を作れない。
-  リフレッシュトークン導入時（§12-1）に、`WWW-Authenticate: Bearer error="invalid_token"`
-  ヘッダを使うかどうかを再検討する。
+- トレードオフ: クライアントが「期限切れなら自動リフレッシュ」という導線を理由で分けられない。
+  リフレッシュトークン導入時に再検討し、**区別しないまま**とした（§6.9）。クライアントは
+  401 の理由を問わず一度だけリフレッシュを試し、それも失敗したらログインへ戻せばよい。
+  `WWW-Authenticate: Bearer error="invalid_token"` は付けない。
+- `/auth/refresh`（#13〜#17）も同じ方針で、失敗はすべて `401 invalid_grant` にする。
 
 **#7 — 空配列に統一する。**
 `[Todo!]!` を non-null リストにしているのはこの方針の裏返し。「該当なし」を
@@ -1037,6 +1101,65 @@ DB に問い合わせず即座に `[]` を返す（無駄なクエリも撃た�
 `FindUserByID` は Router から任意の representation で呼ばれる。ここで
 「行が無ければ作る」を無条件に適用すると、`users` テーブルに任意の UUID の行を
 作らせる書き込み経路になる。provisioning の対象は常に viewer 自身に限る。
+
+### 6.9 リフレッシュトークン
+
+アクセストークンは 15 分（§6.1）のまま、ログインを維持する手段と失効の手段を auth_db だけで用意する。
+Redis は増やさない（§1）。auth はグラフの外のまま（ADR 0001）。
+
+| 項目 | 決定 |
+| --- | --- |
+| 形式 | 不透明な乱数（32 バイトを base64url）。JWT にはしない |
+| 保存 | `auth_db.refresh_tokens`（§5.1）に **SHA-256 ハッシュだけ**を保存する |
+| ファミリー | ログイン / サインアップ 1 回ごとに `family_id` を採番し、ローテーションで引き継ぐ |
+| 期限 | **14 日のスライド + 30 日の上限**。`expires_at = min(now + 14d, family_expires_at)` |
+| ローテーション | `/auth/refresh` のたびに旧行へ `used_at` を付け、同じファミリーで新しい行を作る |
+| 再利用の検知 | `used_at` 付きの行が猶予を過ぎて再提示されたら、**そのファミリー**を DELETE |
+| 猶予 | 使用から 10 秒以内の再提示は並行リクエストとみなし、アクセストークンだけを返す |
+| ログアウト | `/auth/logout` でファミリーを DELETE。アクセストークンは最大 15 分で自然に切れる |
+| 掃除 | ログイン時に、そのユーザーの `family_expires_at` を過ぎた行を消す。cron は置かない |
+
+設定は `REFRESH_TOKEN_TTL=336h` / `REFRESH_TOKEN_MAX_AGE=720h` / `REFRESH_REUSE_GRACE=10s`。
+`time.ParseDuration` は日数（`d`）を受け付けないので時間で書く。
+
+#### JWT にせず、ハッシュで保存する理由
+
+ローテーションと失効のために、どうせ毎回 DB を引く。そうなると自己完結した形式の利点
+（DB を見ずに検証できる）が無く、署名鍵の用途が増えるだけになる。
+保存はハッシュだけにして、DB が漏れてもそのまま使える値が出ないようにする。
+32 バイトの乱数はエントロピーが十分なので、bcrypt のような遅いハッシュは要らない。
+ハッシュで直接引けるので一意索引も効く。
+
+#### 失効の単位をユーザーではなくファミリーにした理由
+
+当初（§12-1）は「再利用を検知したら、そのユーザーの全トークンを失効」としていたが、ファミリー単位に改めた。
+
+- 再利用が示すのは「このログインから派生したトークンが漏れた」ことだけで、他の端末のセッションが漏れた根拠にはならない。
+- ユーザー単位にすると、1 台の事故（Cookie の巻き戻りなど）で全端末がログアウトされる。誤検知のコストが大きい。
+- OAuth 2.0 Security BCP（RFC 9700 §4.14.2）も、失効の単位を「そのリフレッシュトークンのグラント」としている。
+
+全端末を追い出したい操作（パスワード変更など）ができたら、`user_id` 単位の DELETE を別に用意する。
+
+#### 並行リクエストの猶予と、その代償
+
+web は Infinite スクロールと画面遷移が重なることがある。アクセストークンの Cookie が切れた瞬間に
+2 つのリクエストが同じリフレッシュトークンを持ってくると、`SELECT … FOR UPDATE` で直列化された
+後の側には使用済みに見える。猶予が無いと、正規の利用者が自分のファミリーを失効させてしまう。
+
+猶予内の再提示ではリフレッシュトークンを差し替えず、アクセストークンだけを返す
+（web はリフレッシュトークンの Cookie を触らない）。
+
+- 代償: 正規の利用から 10 秒以内に盗まれた値が使われると、攻撃者は 15 分有効のアクセストークンを 1 つ得る。
+- ただしリフレッシュトークンは得られないので、セッションを延長することはできない。
+
+#### 検討して採らなかった案
+
+| 案 | 採らなかった理由 |
+| --- | --- |
+| アクセストークンの TTL を延ばす | 失効手段が無いまま漏洩窓が広がる（§6.1） |
+| `jti` ブロックリスト | Redis が要る。「キャッシュサーバー不要」と衝突する |
+| auth が `Set-Cookie` で直接返す | auth には web 以外のクライアント（curl、将来の SPA / モバイル）もいる。Cookie にするかは BFF 側で決める |
+| 再利用の検知でユーザーの全トークンを失効 | 上記のとおり。誤検知時の巻き込みが大きい |
 
 ---
 
@@ -1234,6 +1357,7 @@ Schema Registry を使う `wgc router fetch` に切り替えるのが公式の�
 | パス | 転送先 | 追加設定 |
 | --- | --- | --- |
 | `/auth/login`, `/auth/signup` | auth サービス | **IP あたり 5 req/min のレート制限**（ブルートフォース対策） |
+| `/auth/refresh`, `/auth/logout`（残りの `/auth/*`） | auth サービス | レート制限なし（256 ビットの乱数で総当たりが成り立たない。§6.9） |
 | `/.well-known/jwks.json` | auth サービス | レート制限なし |
 | `/graphql` | Cosmo Router | — |
 | `POST /login`, `POST /signup` | web | auth と同じ 5 req/min のレート制限（§4.7） |
@@ -1336,6 +1460,8 @@ curl -s localhost:3002/graphql \
 | 200 | ログイン成功 | トークン |
 | 400 | 入力不正（メール形式、パスワード長など） | `{"error": "invalid_request", "message": "..."}` |
 | 401 | 認証失敗（メール不在・パスワード相違を区別しない） | `{"error": "invalid_credentials"}` |
+| 401 | `/auth/refresh` の失敗（不明・期限切れ・再利用を区別しない。§6.9） | `{"error": "invalid_grant"}` |
+| 204 | `/auth/logout`（トークンの有効・無効にかかわらず） | — |
 | 409 | メールアドレス重複（pgx の `23505`） | `{"error": "email_already_exists"}` |
 | 429 | レート制限（Envoy が返す） | — |
 | 500 | 上記以外 | `{"error": "internal_error"}` |
@@ -1366,11 +1492,12 @@ gqlgen の `ErrorPresenter` で内部エラーの詳細をクライアントに�
 | レイヤ | 対象 | 方法 |
 | --- | --- | --- |
 | ユニット | JWT 発行/検証、JWKS 生成、bcrypt（ダミー比較の時間差含む） | 標準 `testing` |
+| ユニット | リフレッシュトークンの判定（ローテーション・猶予・再利用・期限の切り詰め） | 標準 `testing`（`services/auth/internal/refresh`。実装済み） |
 | ユニット | 認可判定（`ViewerFromContext`、entity resolver の所有者チェック） | 標準 `testing` |
 | リポジトリ | sqlc クエリ（特に `user_id` 絞り込み、`ON CONFLICT DO NOTHING`） | testcontainers-go で実 PostgreSQL を起動 |
 | サービス結合 | auth の REST ハンドラ | `httptest` |
 | サブグラフ結合 | resolver + DB | `client.New(handler)`（gqlgen のテストクライアント） |
-| Web | セッション必須・no-store・401 時の Cookie 削除・CSRF・HTML エスケープ | `httptest` と偽の Router（`services/web/internal/handler`。実装済み） |
+| Web | セッション必須・no-store・401 時のリフレッシュと再実行・Cookie 削除・ログアウト時の失効・CSRF・HTML エスケープ | `httptest` と偽の Router・偽の auth（`services/web/internal/handler`。実装済み） |
 | Federation E2E | Router 経由のクロスサブグラフクエリ、JIT provisioning | compose 起動 → HTTP で検証 |
 | 認可の回帰 | §6.8 のポリシー表の全ケース | E2E に含め、CI で必ず実行 |
 
@@ -1451,8 +1578,8 @@ flowchart LR
 
 | # | 項目 | 備考 |
 | --- | --- | --- |
-| 1 | **リフレッシュトークン**（優先度: 高） | アクセストークンを 15 分にしたため、FE クライアントには必須（§6.1）。Web フロントエンド（§4.7）は先に実装したため、現状は 15 分ごとに再ログインになる。auth サービスに `POST /auth/refresh` と `auth_db.refresh_tokens` テーブルを追加し、使用時ローテーション（1 回使ったら新しい値に差し替え、再利用を検知したらそのユーザーの全トークンを失効）を入れる。§6.8-#9 の「失敗理由を区別しない」方針の再検討とセット |
-| 2 | ログアウト / トークン失効 | #1 を実装すれば**同時に解決する**。リフレッシュトークンは `auth_db` に行として存在するため、ログアウト＝該当行の DELETE。アクセストークンは最大 15 分で自然に切れる。`jti` ブロックリスト（＝実質 Redis が必要）を入れずに済み、「キャッシュサーバー不要」の前提とも衝突しない |
+| 1 | リフレッシュトークン | **実装済み**（§6.9）。再利用の検知時の失効単位は、当初案の「ユーザーの全トークン」からファミリー単位に変更した。§6.8-#9 は区別しない方針を維持 |
+| 2 | ログアウト / トークン失効 | **実装済み**（§6.9）。ログアウト＝ファミリーの DELETE。アクセストークンは最大 15 分で自然に切れる。全端末の一括ログアウト（パスワード変更時など）は未実装 |
 | 3 | ページネーション | `todoConnection` を追加済み（§4.6）。`User.todos` と `todos` は全件返しのまま |
 | 4 | TODO の共有機能 | 実装すると認可が「所有者のみ」から ACL に変わり、設計の前提が大きく動く |
 | 5 | DataLoader | `Todo.user` の N+1 は Router がバッチ化するが、サブグラフ内の N+1 は gqlgen の dataloader が必要 |

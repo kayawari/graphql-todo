@@ -2,7 +2,7 @@
 # compose profile "proxy" を有効にしたときだけ起動する。
 #
 # 役割:
-#   1. パスルーティング（/auth/* → auth、/graphql → router）
+#   1. パスルーティング（/auth/* → auth、/graphql → router、それ以外 → web）
 #   2. ログインの IP 単位レート制限（ブルートフォース対策）
 #   3. 401 レスポンスボディの正規化（失敗理由を区別させない / design.md §6.8-#9）
 
@@ -76,6 +76,11 @@ static_resources:
                                 default_value: { numerator: 100, denominator: HUNDRED }
                               filter_enforced:
                                 default_value: { numerator: 100, denominator: HUNDRED }
+
+                        # /auth/refresh・/auth/logout など残りの /auth/*（design.md §6.9）。
+                        # リフレッシュトークンは 256 ビットの乱数で総当たりが成り立たないため、レート制限なし。
+                        - match: { prefix: "/auth/" }
+                          route: { cluster: auth }
 
                         # JWKS: 公開鍵の配信。レート制限なし
                         - match: { prefix: "/.well-known/" }

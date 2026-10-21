@@ -20,7 +20,7 @@ make migrate-new SVC=todo NAME=add_priority
 
 - 各サービス（`services/{auth,user,todo}`）は**独立した Go モジュール**（go.work なし）。Go コマンドはサービスのディレクトリ内で実行する。
   単一テスト: `cd services/todo && go test ./internal/service -run TestName`
-- テストは web のハンドラ（`httptest` + 偽の Router）と todo のカーソルだけ。テスト方針は design.md §10。
+- テストは web のハンドラ（`httptest` + 偽の Router / 偽の auth）、todo のカーソル、auth のリフレッシュトークンの判定（`internal/refresh`）だけ。テスト方針は design.md §10。
 - GraphQL スキーマ（`services/{user,todo}/graph/schema.graphqls`）を変えたら `make generate && make router`。再合成しないと Router は古いスーパーグラフのまま動く（`make up` だけでは、起動中の Router は新しい `router.json` を読み直さない）。
 - SQL（`db/<svc>/queries/*.sql` やマイグレーション）を変えたら `make sqlc`。sqlc はマイグレーションディレクトリをスキーマとして読む。マイグレーション適用は `make down && make up` が最速。
 - `make gen-keys` は意図的に冪等。`secrets/dev/jwt_private.pem` を消して再生成すると `kid` が変わり発行済みトークンが全滅する。
@@ -36,7 +36,7 @@ Client ─(Envoy :8080, 任意)─┬─ /auth/*  → auth :8083（REST・グラ
 PostgreSQL: auth_db / user_db / todo_db（ロールごとに分離、相互 CONNECT 剥奪）
 ```
 
-- **auth はグラフに参加しない**（ADR 0001）。そのおかげで Router を `require_authentication: true` で閉じられる。Router に公開オペレーションを追加する設計は取らない。
+- **auth はグラフに参加しない**（ADR 0001）。リフレッシュトークンは auth_db にハッシュで保存し、使うたびにローテーションして、再利用を検知したらファミリー単位で失効させる（design.md §6.9）。そのおかげで Router を `require_authentication: true` で閉じられる。Router に公開オペレーションを追加する設計は取らない。
 - **3 つの DB は同じユーザー UUID を共有する規約だけで結び付いている**（FK なし）。user_db の行は `me` 初回アクセス時の JIT provisioning（`services/user/internal/service/provisioning.go`）で作られる。シード（`scripts/seed.sh`）も SQL 直投入ではなく REST + GraphQL 経由で投入する。
 - `User.email` は user_db に保存せず JWT claims から解決する。
 - Router の設定は `router/config.yaml`、合成入力は `router/graph.yaml`（docker compose の `compose.yaml` と紛らわしいので別名）。`router/router.json` は生成物で gitignore 対象。Router はコントロールプレーンなしで動かしている。Cosmo の設定キーが設計書と実物で違った経緯は `todo.md` #4。
@@ -54,7 +54,8 @@ PostgreSQL: auth_db / user_db / todo_db（ロールごとに分離、相互 CONN
 ### web（services/web、design.md §4.7）
 
 - 標準ライブラリのみ。テンプレートと JS は `web/` に置き、`embed` でバイナリに入れる。画面ごとに `layout.html` と各ページのテンプレートを組で読み込む（`content` をページごとに定義し直すため）。
-- アクセストークンは `HttpOnly` + `SameSite=Strict` の Cookie に入れ、サーバー側で Router へ `Authorization` として転送する。web 自身はトークンを検証せず、ユーザー ID も扱わない。Router の 401 は Cookie 削除 + `/login`、`NOT_FOUND` は 404 画面にする。
+- アクセストークン（Cookie `session`）とリフレッシュトークン（Cookie `refresh`）は `HttpOnly` + `SameSite=Strict` の Cookie に入れ、サーバー側で Router へ `Authorization` として転送する。web 自身はトークンを検証せず、ユーザー ID も扱わない。`NOT_FOUND` は 404 画面にする。
+- `session` が切れていれば `requireSession` が、Router が 401 を返せば `h.query` が、一度だけ `/auth/refresh` してから続行する。それも失敗したら両方の Cookie を消して `/login` へ。Router を呼ぶときは `h.gql.Do` を直接使わず `h.query` を通す（design.md §4.7, §6.9）。
 - 認証が要るルートは `requireSession` で包む（`Cache-Control: no-store` も付く）。POST はすべて `sameOrigin` で Origin / Referer を確かめる。
 - 一覧は `todoConnection(filter: {status: TODO})`。DONE は表示しない。CSS は黒〜グレーの濃淡のみ。
 

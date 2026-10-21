@@ -50,5 +50,16 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	// TODO: サインアップ以降に displayName を claim へ載せる必要が出たら、
 	// user サブグラフに問い合わせるのではなく claim を消す方向で検討する
 	// （auth が user に依存すると分離の意味が薄れるため）。
-	h.respondWithToken(w, http.StatusOK, cred.ID, cred.Email, "")
+	// 上限を過ぎたファミリーの掃除はログインのついでに行い、cron を置かない（design.md §6.9）。
+	// 失敗してもログインは止めない。
+	if err := h.rt.Cleanup(r.Context(), cred.ID); err != nil {
+		h.log.Warn("cleanup refresh tokens", "err", err)
+	}
+	rt, err := h.rt.Issue(r.Context(), cred.ID)
+	if err != nil {
+		h.internalError(w, "issue refresh token", err)
+		return
+	}
+
+	h.respondWithToken(w, http.StatusOK, cred.ID, cred.Email, "", &rt)
 }

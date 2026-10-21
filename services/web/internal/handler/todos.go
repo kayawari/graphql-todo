@@ -90,7 +90,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		} `json:"me"`
 		TodoConnection connection `json:"todoConnection"`
 	}
-	if err := h.gql.Do(r.Context(), tokenFrom(r.Context()), listQuery, h.pageVars(r), &data); err != nil {
+	if err := h.query(w, r, listQuery, h.pageVars(r), &data); err != nil {
 		h.fail(w, r, "list", err)
 		return
 	}
@@ -108,7 +108,7 @@ func (h *Handler) listPage(w http.ResponseWriter, r *http.Request) {
 	var data struct {
 		TodoConnection connection `json:"todoConnection"`
 	}
-	if err := h.gql.Do(r.Context(), tokenFrom(r.Context()), pageQuery, h.pageVars(r), &data); err != nil {
+	if err := h.query(w, r, pageQuery, h.pageVars(r), &data); err != nil {
 		h.fail(w, r, "listPage", err)
 		return
 	}
@@ -135,7 +135,7 @@ func todoInput(r *http.Request) map[string]any {
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	const q = `mutation($input: CreateTodoInput!) { createTodo(input: $input) { id } }`
-	err := h.gql.Do(r.Context(), tokenFrom(r.Context()), q, map[string]any{"input": todoInput(r)}, nil)
+	err := h.query(w, r, q, map[string]any{"input": todoInput(r)}, nil)
 	if h.inputError(w, err) {
 		return
 	}
@@ -157,7 +157,7 @@ func (h *Handler) editForm(w http.ResponseWriter, r *http.Request) {
 		} `json:"me"`
 		Todo *todoNode `json:"todo"`
 	}
-	if err := h.gql.Do(r.Context(), tokenFrom(r.Context()), q, map[string]any{"id": r.PathValue("id")}, &data); err != nil {
+	if err := h.query(w, r, q, map[string]any{"id": r.PathValue("id")}, &data); err != nil {
 		h.fail(w, r, "edit", err)
 		return
 	}
@@ -191,7 +191,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) mutate(w http.ResponseWriter, r *http.Request, op, q string, vars map[string]any) {
-	err := h.gql.Do(r.Context(), tokenFrom(r.Context()), q, vars, nil)
+	err := h.query(w, r, q, vars, nil)
 	if h.inputError(w, err) {
 		return
 	}

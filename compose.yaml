@@ -75,6 +75,9 @@ services:
       JWT_ISSUER: ${JWT_ISSUER:-http://auth:8083}
       JWT_AUDIENCE: ${JWT_AUDIENCE:-graphql-todo-api}
       ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-15m}
+      REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-336h}
+      REFRESH_TOKEN_MAX_AGE: ${REFRESH_TOKEN_MAX_AGE:-720h}
+      REFRESH_REUSE_GRACE: ${REFRESH_REUSE_GRACE:-10s}
       JWT_PRIVATE_KEY_PATH: /run/secrets/jwt_private.pem
     volumes:
       # make gen-keys で生成した開発用の秘密鍵。auth だけがこれを持つ。

@@ -16,3 +16,14 @@ type Credential struct {
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
 }
+
+type RefreshToken struct {
+	ID              uuid.UUID
+	FamilyID        uuid.UUID
+	UserID          uuid.UUID
+	TokenHash       []byte
+	ExpiresAt       pgtype.Timestamptz
+	FamilyExpiresAt pgtype.Timestamptz
+	UsedAt          pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+}

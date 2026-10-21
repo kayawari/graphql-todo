@@ -15,6 +15,9 @@ var (
 	// auth 側でも区別していない（design.md §4.1）。
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrEmailExists        = errors.New("email already exists")
+	// ErrSessionExpired はリフレッシュトークンが使えない（期限切れ・失効・再利用）。
+	// auth は理由を区別しない（design.md §6.9）ので、ここでも 1 つにまとめる。
+	ErrSessionExpired = errors.New("session expired")
 )
 
 // InputError は利用者に見せてよい入力エラー。
@@ -22,9 +25,13 @@ type InputError struct{ Msg string }
 
 func (e *InputError) Error() string { return e.Msg }
 
+// Token は auth が返すトークン。RefreshToken が空なら、リフレッシュトークンは
+// 差し替えられていない（並行リクエストの猶予内。design.md §6.9）。
 type Token struct {
-	AccessToken string `json:"accessToken"`
-	ExpiresIn   int    `json:"expiresIn"`
+	AccessToken      string `json:"accessToken"`
+	ExpiresIn        int    `json:"expiresIn"`
+	RefreshToken     string `json:"refreshToken"`
+	RefreshExpiresIn int    `json:"refreshExpiresIn"`
 }
 
 type Auth struct {
@@ -51,7 +58,29 @@ func (a *Auth) Signup(ctx context.Context, email, password, displayName string) 
 	})
 }
 
-func (a *Auth) post(ctx context.Context, path string, body any) (*Token, error) {
+// Refresh はリフレッシュトークンでアクセストークンを出し直す。
+func (a *Auth) Refresh(ctx context.Context, refreshToken string) (*Token, error) {
+	t, err := a.post(ctx, "/auth/refresh", map[string]string{"refreshToken": refreshToken})
+	if errors.Is(err, ErrInvalidCredentials) {
+		return nil, ErrSessionExpired
+	}
+	return t, err
+}
+
+// Logout はリフレッシュトークンのファミリーを auth 側で失効させる。
+func (a *Auth) Logout(ctx context.Context, refreshToken string) error {
+	res, err := a.send(ctx, "/auth/logout", map[string]string{"refreshToken": refreshToken})
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("auth /auth/logout: unexpected status %d", res.StatusCode)
+	}
+	return nil
+}
+
+func (a *Auth) send(ctx context.Context, path string, body any) (*http.Response, error) {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -61,8 +90,11 @@ func (a *Auth) post(ctx context.Context, path string, body any) (*Token, error) 
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	return a.hc.Do(req)
+}
 
-	res, err := a.hc.Do(req)
+func (a *Auth) post(ctx context.Context, path string, body any) (*Token, error) {
+	res, err := a.send(ctx, path, body)
 	if err != nil {
 		return nil, err
 	}
