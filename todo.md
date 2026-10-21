@@ -327,6 +327,40 @@ JWKS は公開鍵なので機密性は要らないが、**完全性**は欠か�
 
 ---
 
+## #10. ページングクエリをインデックスで処理できる形にする
+
+- 出典: design.md §4.6、PR #2 のレビュー
+- 状態: **未対応**
+- 優先度: 低（TODO が少ないうちは実害が小さい）
+
+### 現状
+
+`ListTodosPage`（`db/todo/queries/todos.sql`）は、先頭ページと 2 ページ目以降を 1 本のクエリで扱っている。
+
+```sql
+AND (sqlc.narg('after_created_at')::timestamptz IS NULL
+     OR created_at < sqlc.narg('after_created_at')
+     OR (created_at = sqlc.narg('after_created_at') AND id < sqlc.narg('after_id')::uuid))
+ORDER BY created_at DESC, id DESC
+```
+
+- `NULL なら全件 OR …` の形は、インデックスの範囲条件として使えない
+- インデックスは `(user_id, created_at DESC)` だけで、並び順に使っている `id` が入っていない
+
+pgx の prepared statement で汎用プランが選ばれると、毎ページ `user_id` の行を先頭から読んで
+読み飛ばすことになる。深いページほど遅くなり、1 ページあたりの読み込みが全件に比例する。
+
+### やること
+
+- [ ] 先頭ページ用と 2 ページ目以降用にクエリを分ける
+- [ ] 2 ページ目以降は行値比較 `(created_at, id) < (@after_created_at, @after_id)` にする
+- [ ] `(user_id, created_at DESC, id DESC)` のインデックスをマイグレーションで追加する
+      （既存の `todos_user_id_created_at_idx` は置き換えてよいか確認する）
+- [ ] TODO を数万件入れたユーザーで `EXPLAIN ANALYZE` を取り、深いページでも
+      Index Scan の範囲条件で読めていることを確認する
+
+---
+
 ## 参考: 設計書側で「後回し」と明記した項目
 
 以下は design.md §12「未決事項・今後の拡張」に一覧がある。実装フェーズで
