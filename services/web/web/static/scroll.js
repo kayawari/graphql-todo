@@ -6,8 +6,11 @@
 
   const MIN_DELAY = 1000;
   const MAX_DELAY = 30000;
+  // 続けてこの回数失敗したら再試行をやめ、エラー画面へ移る（無限に取り直さない）
+  const MAX_FAILURES = 3;
   let loading = false;
   let retryDelay = MIN_DELAY;
+  let failures = 0;
 
   // 取得に失敗したら、間隔を空けて監視し直す。
   // IntersectionObserver は見え方が変わったときにしか通知しないため、リンクが
@@ -15,6 +18,11 @@
   // まだ見えていればそこで再取得が走る。
   const retry = (more) => {
     observer.unobserve(more);
+    failures++;
+    if (failures >= MAX_FAILURES) {
+      location.href = "/error";
+      return;
+    }
     setTimeout(() => {
       if (more.isConnected) observer.observe(more);
     }, retryDelay);
@@ -37,6 +45,7 @@
       document.getElementById("more-item").remove();
       list.insertAdjacentHTML("beforeend", html);
       retryDelay = MIN_DELAY;
+      failures = 0;
       const next = document.getElementById("more");
       if (next) observer.observe(next);
     } catch (err) {

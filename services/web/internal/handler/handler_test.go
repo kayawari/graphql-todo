@@ -186,3 +186,14 @@ func TestListPageReturnsFragmentWithNextLink(t *testing.T) {
 		t.Errorf("next link missing: %s", html)
 	}
 }
+
+func TestErrorPage(t *testing.T) {
+	router := &fakeRouter{respond: func(w http.ResponseWriter, _ string) { t.Error("router must not be called") }}
+	ws := newTestServer(t, router)
+
+	res := do(t, ws, "GET", "/error", false, nil)
+	b, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusInternalServerError || !strings.Contains(string(b), "エラーが発生しました") {
+		t.Errorf("GET /error: got %d, want 500 with error message", res.StatusCode)
+	}
+}

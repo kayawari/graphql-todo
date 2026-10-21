@@ -64,6 +64,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /signup", h.signupForm)
 	mux.HandleFunc("POST /signup", h.signup)
 	mux.HandleFunc("POST /logout", h.logout)
+	// scroll.js が続きの取得に何度も失敗したときの行き先。
+	// 一覧の内容は出さないのでセッションは要求しない。
+	mux.HandleFunc("GET /error", func(w http.ResponseWriter, _ *http.Request) { h.serverError(w) })
 
 	mux.Handle("GET /{$}", h.requireSession(h.list))
 	mux.Handle("GET /todos/page", h.requireSession(h.listPage))
@@ -157,6 +160,10 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, op string, err er
 		h.render(w, http.StatusNotFound, "error", page{Title: "見つかりません", Error: "TODO が見つかりません。"})
 	default:
 		h.log.Error("backend", "op", op, "err", err)
-		h.render(w, http.StatusInternalServerError, "error", page{Title: "エラー", Error: "エラーが発生しました。時間をおいて再度お試しください。"})
+		h.serverError(w)
 	}
+}
+
+func (h *Handler) serverError(w http.ResponseWriter) {
+	h.render(w, http.StatusInternalServerError, "error", page{Title: "エラー", Error: "エラーが発生しました。時間をおいて再度お試しください。"})
 }
